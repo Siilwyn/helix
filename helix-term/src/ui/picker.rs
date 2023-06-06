@@ -1,7 +1,9 @@
 use crate::{
     alt,
     compositor::{Component, Compositor, Context, Event, EventResult},
-    ctrl, key, shift,
+    ctrl,
+    job::Callback,
+    key, shift,
     ui::{
         self,
         document::{render_document, LineDecoration, LinePos, TextRenderer},
@@ -70,10 +72,10 @@ impl From<DocumentId> for PathOrId {
     }
 }
 
+type FileCallback<T> = Box<dyn Fn(&Editor, &T) -> Option<FileLocation>>;
+
 /// File path and range of lines (used to align and highlight lines)
 pub type FileLocation = (PathOrId, Option<(usize, usize)>);
-
-type FilePreviewFn<T> = Box<dyn Fn(&Editor, &T) -> Option<FileLocation>>;
 
 pub enum CachedPreview {
     Document(Box<Document>),
@@ -112,6 +114,8 @@ impl Preview<'_, '_> {
     }
 }
 
+type PickerCallback<T> = Box<dyn Fn(&mut Context, &T, Action)>;
+
 pub struct Picker<T: Item> {
     options: Vec<T>,
     editor_data: T::Data,
@@ -131,22 +135,21 @@ pub struct Picker<T: Item> {
     /// Constraints for tabular formatting
     widths: Vec<Constraint>,
 
-    callback_fn: Box<dyn Fn(&mut Context, &T, Action)>,
-
     pub truncate_start: bool,
     /// Caches paths to documents
     preview_cache: HashMap<PathBuf, CachedPreview>,
     read_buffer: Vec<u8>,
     /// Given an item in the picker, return the file path and line number to display.
-    file_fn: Option<FilePreviewFn<T>>,
+    file_fn: Option<FileCallback<T>>,
+    callback_fn: PickerCallback<T>,
 }
 
 impl<T: Item + 'static> Picker<T> {
     fn new(
         options: Vec<T>,
         editor_data: T::Data,
-        callback_fn: Box<dyn Fn(&mut Context, &T, Action) + 'static>,
-        preview_fn: Option<FilePreviewFn<T>>,
+        callback_fn: impl Fn(&mut Context, &T, Action) + 'static,
+        preview_fn: Option<FileCallback<T>>,
     ) -> Self {
         let prompt = Prompt::new(
             "".into(),
@@ -154,26 +157,6 @@ impl<T: Item + 'static> Picker<T> {
             ui::completers::none,
             |_editor: &mut Context, _pattern: &str, _event: PromptEvent| {},
         );
-
-        let n = options
-            .first()
-            .map(|option| option.format(&editor_data).cells.len())
-            .unwrap_or_default();
-        let max_lens = options.iter().fold(vec![0; n], |mut acc, option| {
-            let row = option.format(&editor_data);
-            // maintain max for each column
-            for (acc, cell) in acc.iter_mut().zip(row.cells.iter()) {
-                let width = cell.content.width();
-                if width > *acc {
-                    *acc = width;
-                }
-            }
-            acc
-        });
-        let widths = max_lens
-            .into_iter()
-            .map(|len| Constraint::Length(len as u16))
-            .collect();
 
         let mut picker = Self {
             options,
@@ -184,9 +167,9 @@ impl<T: Item + 'static> Picker<T> {
             prompt,
             previous_pattern: (String::new(), FuzzyQuery::default()),
             show_preview: true,
-            callback_fn,
+            callback_fn: Box::new(callback_fn),
             completion_height: 0,
-            widths,
+            widths: Vec::new(),
 
             truncate_start: true,
             preview_cache: HashMap::new(),
@@ -194,7 +177,9 @@ impl<T: Item + 'static> Picker<T> {
             file_fn: preview_fn,
         };
 
-        // scoring on empty input:
+        picker.calculate_column_widths();
+
+        // scoring on empty input
         // TODO: just reuse score()
         picker
             .matches
@@ -210,6 +195,38 @@ impl<T: Item + 'static> Picker<T> {
         picker
     }
 
+    pub fn set_options(&mut self, new_options: Vec<T>) {
+        self.options = new_options;
+        self.cursor = 0;
+        self.force_score();
+        self.calculate_column_widths();
+    }
+
+    /// Calculate the width constraints using the maximum widths of each column
+    /// for the current options.
+    fn calculate_column_widths(&mut self) {
+        let n = self
+            .options
+            .first()
+            .map(|option| option.format(&self.editor_data).cells.len())
+            .unwrap_or_default();
+        let max_lens = self.options.iter().fold(vec![0; n], |mut acc, option| {
+            let row = option.format(&self.editor_data);
+            // maintain max for each column
+            for (acc, cell) in acc.iter_mut().zip(row.cells.iter()) {
+                let width = cell.content.width();
+                if width > *acc {
+                    *acc = width;
+                }
+            }
+            acc
+        });
+        self.widths = max_lens
+            .into_iter()
+            .map(|len| Constraint::Length(len as u16))
+            .collect();
+    }
+
     pub fn with_preview(
         options: Vec<T>,
         editor_data: T::Data,
@@ -219,7 +236,7 @@ impl<T: Item + 'static> Picker<T> {
         Picker::new(
             options,
             editor_data,
-            Box::new(callback_fn),
+            callback_fn,
             Some(Box::new(preview_fn)),
         )
     }
@@ -229,7 +246,7 @@ impl<T: Item + 'static> Picker<T> {
         editor_data: T::Data,
         callback_fn: impl Fn(&mut Context, &T, Action) + 'static,
     ) -> Self {
-        Picker::new(options, editor_data, Box::new(callback_fn), None)
+        Picker::new(options, editor_data, callback_fn, None)
     }
 
     pub fn score(&mut self) {
@@ -524,7 +541,7 @@ impl<T: Item + 'static> Picker<T> {
                 // might be inconsistencies. This is the best we can do since only the
                 // text in Row is displayed to the end user.
                 let (_score, highlights) = FuzzyQuery::new(self.prompt.line())
-                    .fuzzy_indicies(&line, &self.matcher)
+                    .fuzzy_indices(&line, &self.matcher)
                     .unwrap_or_default();
 
                 let highlight_byte_ranges: Vec<_> = line
@@ -542,7 +559,10 @@ impl<T: Item + 'static> Picker<T> {
                 for cell in row.cells.iter_mut() {
                     let spans = match cell.content.lines.get(0) {
                         Some(s) => s,
-                        None => continue,
+                        None => {
+                            cell_start_byte_offset += TEMP_CELL_SEP.len();
+                            continue;
+                        }
                     };
 
                     let mut cell_len = 0;
@@ -612,6 +632,7 @@ impl<T: Item + 'static> Picker<T> {
                 offset: 0,
                 selected: Some(cursor),
             },
+            self.truncate_start,
         );
     }
 
@@ -899,19 +920,16 @@ impl<T: Item + Send + 'static> Component for DynamicPicker<T> {
 
         cx.jobs.callback(async move {
             let new_options = new_options.await?;
-            let callback =
-                crate::job::Callback::EditorCompositor(Box::new(move |editor, compositor| {
-                    // Wrapping of pickers in overlay is done outside the picker code,
-                    // so this is fragile and will break if wrapped in some other widget.
-                    let picker = match compositor.find_id::<Overlay<DynamicPicker<T>>>(Self::ID) {
-                        Some(overlay) => &mut overlay.content.file_picker,
-                        None => return,
-                    };
-                    picker.options = new_options;
-                    picker.cursor = 0;
-                    picker.force_score();
-                    editor.reset_idle_timer();
-                }));
+            let callback = Callback::EditorCompositor(Box::new(move |editor, compositor| {
+                // Wrapping of pickers in overlay is done outside the picker code,
+                // so this is fragile and will break if wrapped in some other widget.
+                let picker = match compositor.find_id::<Overlay<DynamicPicker<T>>>(Self::ID) {
+                    Some(overlay) => &mut overlay.content.file_picker,
+                    None => return,
+                };
+                picker.set_options(new_options);
+                editor.reset_idle_timer();
+            }));
             anyhow::Ok(callback)
         });
         EventResult::Consumed(None)

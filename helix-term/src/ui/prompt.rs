@@ -14,8 +14,11 @@ use helix_view::{
     Editor,
 };
 
-pub type Completion = (RangeFrom<usize>, Cow<'static, str>);
 type PromptCharHandler = Box<dyn Fn(&mut Prompt, char, &Context)>;
+pub type Completion = (RangeFrom<usize>, Cow<'static, str>);
+type CompletionFn = Box<dyn FnMut(&Editor, &str) -> Vec<Completion>>;
+type CallbackFn = Box<dyn FnMut(&mut Context, &str, PromptEvent)>;
+pub type DocFn = Box<dyn Fn(&str) -> Option<Cow<str>>>;
 
 pub struct Prompt {
     prompt: Cow<'static, str>,
@@ -25,9 +28,9 @@ pub struct Prompt {
     selection: Option<usize>,
     history_register: Option<char>,
     history_pos: Option<usize>,
-    completion_fn: Box<dyn FnMut(&Editor, &str) -> Vec<Completion>>,
-    callback_fn: Box<dyn FnMut(&mut Context, &str, PromptEvent)>,
-    pub doc_fn: Box<dyn Fn(&str) -> Option<Cow<str>>>,
+    completion_fn: CompletionFn,
+    callback_fn: CallbackFn,
+    pub doc_fn: DocFn,
     next_char_handler: Option<PromptCharHandler>,
 }
 
@@ -508,12 +511,22 @@ impl Component for Prompt {
             ctrl!('e') | key!(End) => self.move_end(),
             ctrl!('a') | key!(Home) => self.move_start(),
             ctrl!('w') | alt!(Backspace) | ctrl!(Backspace) => {
-                self.delete_word_backwards(cx.editor)
+                self.delete_word_backwards(cx.editor);
+                (self.callback_fn)(cx, &self.line, PromptEvent::Update);
             }
-            alt!('d') | alt!(Delete) | ctrl!(Delete) => self.delete_word_forwards(cx.editor),
-            ctrl!('k') => self.kill_to_end_of_line(cx.editor),
-            ctrl!('u') => self.kill_to_start_of_line(cx.editor),
-            ctrl!('h') | key!(Backspace) => {
+            alt!('d') | alt!(Delete) | ctrl!(Delete) => {
+                self.delete_word_forwards(cx.editor);
+                (self.callback_fn)(cx, &self.line, PromptEvent::Update);
+            }
+            ctrl!('k') => {
+                self.kill_to_end_of_line(cx.editor);
+                (self.callback_fn)(cx, &self.line, PromptEvent::Update);
+            }
+            ctrl!('u') => {
+                self.kill_to_start_of_line(cx.editor);
+                (self.callback_fn)(cx, &self.line, PromptEvent::Update);
+            }
+            ctrl!('h') | key!(Backspace) | shift!(Backspace) => {
                 self.delete_char_backwards(cx.editor);
                 (self.callback_fn)(cx, &self.line, PromptEvent::Update);
             }
