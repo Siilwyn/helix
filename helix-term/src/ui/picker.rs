@@ -123,6 +123,13 @@ pub struct Column<T> {
     // This will be used when we start rendering the table header for pickers with >1 column.
     #[allow(dead_code)]
     name: &'static str,
+    // TODO: currently these are dead code. Ideally DynPickers could use a
+    // "display only" column for the entry of their query so that we wouldn't
+    // exclude valid results:
+    // * https://github.com/helix-editor/helix/issues/5714
+    // * https://github.com/helix-editor/helix/pull/4687#issuecomment-1364586418
+    // Then Picker would look for the first column with 'filter: true' and use
+    // that for filtering and same for sorting.
     sort: bool,
     filter: bool,
     format_fn: Box<dyn Fn(&T) -> Cell>,
@@ -609,6 +616,10 @@ impl<T> Picker<T> {
                     // text in Cell is displayed to the end user.
                     let line: String = spans.into();
 
+                    // TODO: only draw matching parts for the active column? That would make it
+                    // clearer which column is active. Or maybe use a separate theme scope for the
+                    // inactive columns?
+
                     let (_score, highlights) = FuzzyQuery::new(self.prompts[column_idx].line())
                         .fuzzy_indices(&line, &self.matcher)
                         .unwrap_or_default();
@@ -878,6 +889,10 @@ impl<T: 'static> Component for Picker<T> {
             ctrl!('t') => {
                 self.toggle_preview();
             }
+            // TODO: decide on a proper key and document it.
+            // Do we need forward + backward or is just forward enough?
+            // C-f is not ideal, it should be a scrolling keybind (C-f/C-b should
+            // be the current C-u/C-d and C-u/C-d should move half-pages.).
             ctrl!('f') => {
                 self.focus_next_column();
             }
