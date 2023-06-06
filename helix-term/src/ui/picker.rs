@@ -145,11 +145,10 @@ pub struct Picker<T: Item> {
 }
 
 impl<T: Item + 'static> Picker<T> {
-    fn new(
+    pub fn new(
         options: Vec<T>,
         editor_data: T::Data,
         callback_fn: impl Fn(&mut Context, &T, Action) + 'static,
-        preview_fn: Option<FileCallback<T>>,
     ) -> Self {
         let prompt = Prompt::new(
             "".into(),
@@ -174,7 +173,7 @@ impl<T: Item + 'static> Picker<T> {
             truncate_start: true,
             preview_cache: HashMap::new(),
             read_buffer: Vec::with_capacity(1024),
-            file_fn: preview_fn,
+            file_fn: None,
         };
 
         picker.calculate_column_widths();
@@ -228,25 +227,11 @@ impl<T: Item + 'static> Picker<T> {
     }
 
     pub fn with_preview(
-        options: Vec<T>,
-        editor_data: T::Data,
-        callback_fn: impl Fn(&mut Context, &T, Action) + 'static,
+        mut self,
         preview_fn: impl Fn(&Editor, &T) -> Option<FileLocation> + 'static,
     ) -> Self {
-        Picker::new(
-            options,
-            editor_data,
-            callback_fn,
-            Some(Box::new(preview_fn)),
-        )
-    }
-
-    pub fn without_preview(
-        options: Vec<T>,
-        editor_data: T::Data,
-        callback_fn: impl Fn(&mut Context, &T, Action) + 'static,
-    ) -> Self {
-        Picker::new(options, editor_data, callback_fn, None)
+        self.file_fn = Some(Box::new(preview_fn));
+        self
     }
 
     pub fn score(&mut self) {
