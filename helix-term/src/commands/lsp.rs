@@ -247,77 +247,70 @@ struct SymbolInformationItem {
     offset_encoding: OffsetEncoding,
 }
 
-type SymbolPicker = Picker<SymbolInformationItem, Option<lsp::Url>>;
+type SymbolPicker = Picker<SymbolInformationItem>;
 
 fn sym_picker(symbols: Vec<SymbolInformationItem>, current_path: Option<lsp::Url>) -> SymbolPicker {
+    // TODO: drop current_path comparison and instead use workspace: bool flag?
+    let doc_current_path = current_path.clone();
     let columns = vec![
-        ui::PickerColumn::new("Type", |item: &SymbolInformationItem, _| {
+        ui::PickerColumn::new("Type", |item: &SymbolInformationItem| {
             display_symbol_kind(item.symbol.kind).into()
         }),
-        ui::PickerColumn::new(
-            "Name",
-            |item: &SymbolInformationItem, current_doc_path: Option<lsp::Url>| {
-                if current_doc_path.as_ref() == Some(&item.symbol.location.uri) {
-                    item.symbol.name.as_str().into()
-                } else {
-                    match item.symbol.location.uri.to_file_path() {
-                        Ok(path) => {
-                            let get_relative_path = path::get_relative_path(path.as_path());
-                            format!(
-                                "{} ({})",
-                                &item.symbol.name,
-                                get_relative_path.to_string_lossy()
-                            )
-                            .into()
-                        }
-                        Err(_) => {
-                            format!("{} ({})", &item.symbol.name, &item.symbol.location.uri).into()
-                        }
+        ui::PickerColumn::new("Name", move |item: &SymbolInformationItem| {
+            if doc_current_path.as_ref() == Some(&item.symbol.location.uri) {
+                item.symbol.name.as_str().into()
+            } else {
+                match item.symbol.location.uri.to_file_path() {
+                    Ok(path) => {
+                        let get_relative_path = path::get_relative_path(path.as_path());
+                        format!(
+                            "{} ({})",
+                            &item.symbol.name,
+                            get_relative_path.to_string_lossy()
+                        )
+                        .into()
+                    }
+                    Err(_) => {
+                        format!("{} ({})", &item.symbol.name, &item.symbol.location.uri).into()
                     }
                 }
-            },
-        ),
+            }
+        }),
     ];
 
-    // TODO: drop current_path comparison and instead use workspace: bool flag?
-    Picker::new(
-        columns,
-        symbols,
-        current_path.clone(),
-        move |cx, item, action| {
-            let (view, doc) = current!(cx.editor);
-            push_jump(view, doc);
+    Picker::new(columns, symbols, move |cx, item, action| {
+        let (view, doc) = current!(cx.editor);
+        push_jump(view, doc);
 
-            if current_path.as_ref() != Some(&item.symbol.location.uri) {
-                let uri = &item.symbol.location.uri;
-                let path = match uri.to_file_path() {
-                    Ok(path) => path,
-                    Err(_) => {
-                        let err = format!("unable to convert URI to filepath: {}", uri);
-                        cx.editor.set_error(err);
-                        return;
-                    }
-                };
-                if let Err(err) = cx.editor.open(&path, action) {
-                    let err = format!("failed to open document: {}: {}", uri, err);
-                    log::error!("{}", err);
+        if current_path.as_ref() != Some(&item.symbol.location.uri) {
+            let uri = &item.symbol.location.uri;
+            let path = match uri.to_file_path() {
+                Ok(path) => path,
+                Err(_) => {
+                    let err = format!("unable to convert URI to filepath: {}", uri);
                     cx.editor.set_error(err);
                     return;
                 }
+            };
+            if let Err(err) = cx.editor.open(&path, action) {
+                let err = format!("failed to open document: {}: {}", uri, err);
+                log::error!("{}", err);
+                cx.editor.set_error(err);
+                return;
             }
+        }
 
-            let (view, doc) = current!(cx.editor);
+        let (view, doc) = current!(cx.editor);
 
-            if let Some(range) =
-                lsp_range_to_range(doc.text(), item.symbol.location.range, item.offset_encoding)
-            {
-                // we flip the range so that the cursor sits on the start of the symbol
-                // (for example start of the function).
-                doc.set_selection(view.id, Selection::single(range.head, range.anchor));
-                align_view(doc, view, Align::Center);
-            }
-        },
-    )
+        if let Some(range) =
+            lsp_range_to_range(doc.text(), item.symbol.location.range, item.offset_encoding)
+        {
+            // we flip the range so that the cursor sits on the start of the symbol
+            // (for example start of the function).
+            doc.set_selection(view.id, Selection::single(range.head, range.anchor));
+            align_view(doc, view, Align::Center);
+        }
+    })
     .truncate_start(false)
     .with_preview(move |_editor, item| Some(location_to_file_location(&item.symbol.location)))
 }
@@ -328,13 +321,13 @@ enum DiagnosticsFormat {
     HideSourcePath,
 }
 
-type DiagnosticsPicker = Picker<PickerDiagnostic, (DiagnosticStyles, DiagnosticsFormat)>;
+type DiagnosticsPicker = Picker<PickerDiagnostic>;
 
 fn diag_picker(
     cx: &Context,
     diagnostics: BTreeMap<lsp::Url, Vec<(lsp::Diagnostic, usize)>>,
     current_path: Option<lsp::Url>,
-    format: DiagnosticsFormat,
+    _format: DiagnosticsFormat,
 ) -> DiagnosticsPicker {
     // TODO: drop current_path comparison and instead use workspace: bool flag?
 
@@ -354,17 +347,16 @@ fn diag_picker(
         }
     }
 
-    let styles = DiagnosticStyles {
-        hint: cx.editor.theme.get("hint"),
-        info: cx.editor.theme.get("info"),
-        warning: cx.editor.theme.get("warning"),
-        error: cx.editor.theme.get("error"),
-    };
+    // let styles = DiagnosticStyles {
+    //     hint: cx.editor.theme.get("hint"),
+    //     info: cx.editor.theme.get("info"),
+    //     warning: cx.editor.theme.get("warning"),
+    //     error: cx.editor.theme.get("error"),
+    // };
 
     Picker::new(
-        vec![],
+        vec![], // takes (styles, format)
         flat_diag,
-        (styles, format),
         move |cx,
               PickerDiagnostic {
                   url,
@@ -1072,7 +1064,7 @@ fn goto_impl(
     locations: Vec<lsp::Location>,
     offset_encoding: OffsetEncoding,
 ) {
-    let cwdir = std::env::current_dir().unwrap_or_default();
+    // let cwdir = std::env::current_dir().unwrap_or_default();
 
     match locations.as_slice() {
         [location] => {
@@ -1082,7 +1074,8 @@ fn goto_impl(
             editor.set_error("No definition found.");
         }
         _locations => {
-            let picker = Picker::new(vec![], locations, cwdir, move |cx, location, action| {
+            // vec![] takes cwdir
+            let picker = Picker::new(vec![], locations, move |cx, location, action| {
                 jump_to_location(cx.editor, location, offset_encoding, action)
             })
             .with_preview(move |_editor, location| Some(location_to_file_location(location)));

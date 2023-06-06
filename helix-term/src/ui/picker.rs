@@ -119,37 +119,36 @@ impl Preview<'_, '_> {
 
 type PickerCallback<T> = Box<dyn Fn(&mut Context, &T, Action)>;
 
-pub struct Column<Item, Data> {
+pub struct Column<T> {
+    // This will be used when we start rendering the table header for pickers with >1 column.
+    #[allow(dead_code)]
     name: &'static str,
     sort: bool,
     filter: bool,
-    // TODO: switch to a `Box<dyn Fn(&Item, Data) -> Cell + 'static>` to
-    // eliminate the `Data` argument/type-parameter and allow capturing
-    // values.
-    format_fn: fn(&Item, Data) -> Cell,
-    sort_text_fn: Option<fn(&Item, Data) -> Cow<str>>,
-    filter_text_fn: Option<fn(&Item, Data) -> Cow<str>>,
+    format_fn: Box<dyn Fn(&T) -> Cell>,
+    sort_text_fn: Option<Box<dyn Fn(&T) -> Cow<str>>>,
+    filter_text_fn: Option<Box<dyn Fn(&T) -> Cow<str>>>,
 }
 
-impl<Item, Data> Column<Item, Data> {
-    pub fn new(name: &'static str, format_fn: fn(&Item, Data) -> Cell) -> Self {
+impl<T> Column<T> {
+    pub fn new(name: &'static str, format: impl Fn(&T) -> Cell + 'static) -> Self {
         Self {
             name,
             sort: true,
             filter: true,
-            format_fn,
+            format_fn: Box::new(format),
             sort_text_fn: None,
             filter_text_fn: None,
         }
     }
 
-    pub fn with_sort_text(mut self, sort_text: fn(&Item, Data) -> Cow<str>) -> Self {
-        self.sort_text_fn = Some(sort_text);
+    pub fn with_sort_text(mut self, sort_text: impl Fn(&T) -> Cow<str> + 'static) -> Self {
+        self.sort_text_fn = Some(Box::new(sort_text));
         self
     }
 
-    pub fn with_filter_text(mut self, filter_text: fn(&Item, Data) -> Cow<str>) -> Self {
-        self.filter_text_fn = Some(filter_text);
+    pub fn with_filter_text(mut self, filter_text: impl Fn(&T) -> Cow<str> + 'static) -> Self {
+        self.filter_text_fn = Some(Box::new(filter_text));
         self
     }
 
@@ -159,38 +158,37 @@ impl<Item, Data> Column<Item, Data> {
         self
     }
 
-    fn format(&self, item: &Item, data: Data) -> Cell {
-        (self.format_fn)(item, data)
+    fn format<'a>(&self, item: &'a T) -> Cell<'a> {
+        (self.format_fn)(item)
     }
 
-    fn format_text(&self, item: &Item, data: Data) -> Cow<str> {
-        let text: String = self.format(item, data).content.into();
+    fn format_text<'a>(&self, item: &'a T) -> Cow<'a, str> {
+        let text: String = self.format(item).content.into();
         text.into()
     }
 
-    fn filter_text(&self, item: &Item, data: Data) -> Cow<str> {
-        match self.filter_text_fn {
-            Some(filter_text_fn) => filter_text_fn(item, data),
-            None => self.format_text(item, data),
+    fn filter_text<'a>(&self, item: &'a T) -> Cow<'a, str> {
+        match &self.filter_text_fn {
+            Some(filter_text_fn) => filter_text_fn(item),
+            None => self.format_text(item),
         }
     }
 
-    fn sort_text(&self, item: &Item, data: Data) -> Cow<str> {
-        match self.sort_text_fn {
-            Some(sort_text_fn) => sort_text_fn(item, data),
-            None => self.format_text(item, data),
+    fn sort_text<'a>(&self, item: &'a T) -> Cow<'a, str> {
+        match &self.sort_text_fn {
+            Some(sort_text_fn) => sort_text_fn(item),
+            None => self.format_text(item),
         }
     }
 }
 
 // hopslotmap of columns?
 
-pub struct Picker<T, Data> {
-    columns: Vec<Column<T, Data>>,
+pub struct Picker<T> {
+    columns: Vec<Column<T>>,
     /// The index of the currently focused column
     column: usize,
     options: Vec<T>,
-    editor_data: Data,
     // TODO: vec of these?
     matcher: Box<Matcher>,
     matches: Vec<PickerMatch>,
@@ -215,11 +213,10 @@ pub struct Picker<T, Data> {
     callback_fn: PickerCallback<T>,
 }
 
-impl<T, Data> Picker<T, Data> {
+impl<T> Picker<T> {
     pub fn new(
-        columns: Vec<Column<T, Data>>,
+        columns: Vec<Column<T>>,
         options: Vec<T>,
-        editor_data: Data,
         callback_fn: impl Fn(&mut Context, &T, Action) + 'static,
     ) -> Self {
         assert!(!columns.is_empty());
@@ -240,7 +237,6 @@ impl<T, Data> Picker<T, Data> {
             columns,
             column: 0,
             options,
-            editor_data,
             matcher: Box::default(),
             matches: Vec::new(),
             cursor: 0,
@@ -264,7 +260,7 @@ impl<T, Data> Picker<T, Data> {
         picker
             .matches
             .extend(picker.options.iter().enumerate().map(|(index, option)| {
-                let text = picker.columns[picker.column].filter_text(option, picker.editor_data);
+                let text = picker.columns[picker.column].filter_text(option);
                 PickerMatch {
                     index,
                     score: 0,
@@ -289,7 +285,7 @@ impl<T, Data> Picker<T, Data> {
         let max_lens = self.options.iter().fold(vec![0; n], |mut acc, option| {
             // maintain max for each column
             for (acc, column) in acc.iter_mut().zip(self.columns.iter()) {
-                let cell = column.format(option, self.editor_data);
+                let cell = column.format(option);
                 let width = cell.content.width();
                 if width > *acc {
                     *acc = width;
@@ -328,7 +324,7 @@ impl<T, Data> Picker<T, Data> {
             self.matches.clear();
             self.matches
                 .extend(self.options.iter().enumerate().map(|(index, option)| {
-                    let text = self.columns[self.column].filter_text(option, self.editor_data);
+                    let text = self.columns[self.column].filter_text(option);
                     PickerMatch {
                         index,
                         score: 0,
@@ -340,7 +336,7 @@ impl<T, Data> Picker<T, Data> {
             // then we can score the filtered set.
             self.matches.retain_mut(|pmatch| {
                 let option = &self.options[pmatch.index];
-                let text = self.columns[self.column].sort_text(option, self.editor_data);
+                let text = self.columns[self.column].sort_text(option);
 
                 match query.fuzzy_match(&text, &self.matcher) {
                     Some(s) => {
@@ -375,7 +371,7 @@ impl<T, Data> Picker<T, Data> {
                 .iter()
                 .enumerate()
                 .filter_map(|(index, option)| {
-                    let text = self.columns[self.column].filter_text(option, self.editor_data);
+                    let text = self.columns[self.column].filter_text(option);
 
                     query
                         .fuzzy_match(&text, &self.matcher)
@@ -598,7 +594,7 @@ impl<T, Data> Picker<T, Data> {
 
                 // I'm pretty sure I don't need the byte offset between cells.
                 Row::new(self.columns.iter().enumerate().map(|(column_idx, column)| {
-                    let cell = column.format(option, self.editor_data);
+                    let cell = column.format(option);
                     let spans = match cell.content.lines.get(0) {
                         Some(spans) => spans,
                         None => return cell,
@@ -782,7 +778,7 @@ impl<T, Data> Picker<T, Data> {
     }
 }
 
-impl<T: 'static, Data: 'static> Component for Picker<T, Data> {
+impl<T: 'static> Component for Picker<T> {
     fn render(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
         // +---------+ +---------+
         // |prompt   | |preview  |
@@ -935,16 +931,16 @@ pub type DynQueryCallback<T> =
 
 /// A picker that updates its contents via a callback whenever the
 /// query string changes. Useful for live grep, workspace symbols, etc.
-pub struct DynamicPicker<T: Send, Data> {
-    file_picker: Picker<T, Data>,
+pub struct DynamicPicker<T: Send> {
+    file_picker: Picker<T>,
     query_callback: DynQueryCallback<T>,
     query: String,
 }
 
-impl<T: Send, Data> DynamicPicker<T, Data> {
+impl<T: Send> DynamicPicker<T> {
     pub const ID: &'static str = "dynamic-picker";
 
-    pub fn new(file_picker: Picker<T, Data>, query_callback: DynQueryCallback<T>) -> Self {
+    pub fn new(file_picker: Picker<T>, query_callback: DynQueryCallback<T>) -> Self {
         Self {
             file_picker,
             query_callback,
@@ -953,7 +949,7 @@ impl<T: Send, Data> DynamicPicker<T, Data> {
     }
 }
 
-impl<T: Send + 'static, Data: 'static> Component for DynamicPicker<T, Data> {
+impl<T: Send + 'static> Component for DynamicPicker<T> {
     fn render(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
         self.file_picker.render(area, surface, cx);
     }
@@ -975,7 +971,7 @@ impl<T: Send + 'static, Data: 'static> Component for DynamicPicker<T, Data> {
             let callback = Callback::EditorCompositor(Box::new(move |editor, compositor| {
                 // Wrapping of pickers in overlay is done outside the picker code,
                 // so this is fragile and will break if wrapped in some other widget.
-                let picker = match compositor.find_id::<Overlay<DynamicPicker<T, Data>>>(Self::ID) {
+                let picker = match compositor.find_id::<Overlay<DynamicPicker<T>>>(Self::ID) {
                     Some(overlay) => &mut overlay.content.file_picker,
                     None => return,
                 };

@@ -2132,7 +2132,7 @@ fn global_search(cx: &mut Context) {
         },
     );
 
-    let current_path = doc_mut!(cx.editor).path().cloned();
+    // let current_path = doc_mut!(cx.editor).path().cloned();
 
     let show_picker = async move {
         let all_matches: Vec<FileResult> =
@@ -2145,9 +2145,8 @@ fn global_search(cx: &mut Context) {
                 }
 
                 let picker = Picker::new(
-                    vec![],
+                    vec![], // takes current_path
                     all_matches,
-                    current_path,
                     move |cx, FileResult { path, line_num }, action| {
                         match cx.editor.open(path, action) {
                             Ok(_) => {}
@@ -2567,7 +2566,7 @@ fn buffer_picker(cx: &mut Context) {
     // mru
     items.sort_unstable_by_key(|item| std::cmp::Reverse(item.focused_at));
 
-    let picker = Picker::new(vec![], items, (), |cx, meta, action| {
+    let picker = Picker::new(vec![], items, |cx, meta, action| {
         cx.editor.switch(meta.id, action);
     })
     .with_preview(|editor, meta| {
@@ -2655,7 +2654,6 @@ fn jumplist_picker(cx: &mut Context) {
                     .map(|(doc_id, selection)| new_meta(view, *doc_id, selection.clone()))
             })
             .collect(),
-        (),
         |cx, meta, action| {
             cx.editor.switch(meta.id, action);
             let config = cx.editor.config();
@@ -2703,10 +2701,10 @@ impl ui::menu::Item for MappableCommand {
 
 pub fn command_palette(cx: &mut Context) {
     cx.callback = Some(Box::new(
-        move |compositor: &mut Compositor, cx: &mut compositor::Context| {
-            let keymap = compositor.find::<ui::EditorView>().unwrap().keymaps.map()
-                [&cx.editor.mode]
-                .reverse_map();
+        move |compositor: &mut Compositor, _cx: &mut compositor::Context| {
+            // let keymap = compositor.find::<ui::EditorView>().unwrap().keymaps.map()
+            //     [&cx.editor.mode]
+            //     .reverse_map();
 
             let mut commands: Vec<MappableCommand> = MappableCommand::STATIC_COMMAND_LIST.into();
             commands.extend(typed::TYPABLE_COMMAND_LIST.iter().map(|cmd| {
@@ -2717,7 +2715,8 @@ pub fn command_palette(cx: &mut Context) {
                 }
             }));
 
-            let picker = Picker::new(vec![], commands, keymap, move |cx, command, _action| {
+            // vec![] takes keymap
+            let picker = Picker::new(vec![], commands, move |cx, command, _action| {
                 let mut ctx = Context {
                     register: None,
                     count: std::num::NonZeroUsize::new(1),

@@ -1357,10 +1357,9 @@ fn lsp_workspace_command(
         let callback = async move {
             let call: job::Callback = Callback::EditorCompositor(Box::new(
                 move |_editor: &mut Editor, compositor: &mut Compositor| {
-                    let picker =
-                        ui::Picker::new(vec![], commands, (), move |cx, command, _action| {
-                            execute_lsp_command(cx.editor, language_server_id, command.clone());
-                        });
+                    let picker = ui::Picker::new(vec![], commands, move |cx, command, _action| {
+                        execute_lsp_command(cx.editor, language_server_id, command.clone());
+                    });
                     compositor.push(Box::new(overlaid(picker)))
                 },
             ));

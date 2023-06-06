@@ -70,13 +70,12 @@ fn thread_picker(
                 callback_fn(editor, &threads[0]);
                 return;
             }
-            let debugger = debugger!(editor);
+            // let debugger = debugger!(editor);
 
-            let thread_states = debugger.thread_states.clone();
+            // let thread_states = debugger.thread_states.clone();
             let picker = Picker::new(
-                vec![],
+                vec![], // takes thread_states
                 threads,
-                thread_states,
                 move |cx, thread, _action| callback_fn(cx.editor, thread),
             )
             .with_preview(move |editor, thread| {
@@ -274,7 +273,6 @@ pub fn dap_launch(cx: &mut Context) {
     cx.push_layer(Box::new(overlaid(Picker::new(
         vec![],
         templates,
-        (),
         |cx, template, _action| {
             let completions = template.completion.clone();
             let name = template.name.clone();
@@ -730,7 +728,7 @@ pub fn dap_switch_stack_frame(cx: &mut Context) {
 
     let frames = debugger.stack_frames[&thread_id].clone();
 
-    let picker = Picker::new(vec![], frames, (), move |cx, frame, _action| {
+    let picker = Picker::new(vec![], frames, move |cx, frame, _action| {
         let debugger = debugger!(cx.editor);
         // TODO: this should be simpler to find
         let pos = debugger.stack_frames[&thread_id]
