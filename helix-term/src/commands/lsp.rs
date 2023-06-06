@@ -328,12 +328,14 @@ enum DiagnosticsFormat {
     HideSourcePath,
 }
 
+type DiagnosticsPicker = Picker<PickerDiagnostic, (DiagnosticStyles, DiagnosticsFormat)>;
+
 fn diag_picker(
     cx: &Context,
     diagnostics: BTreeMap<lsp::Url, Vec<(lsp::Diagnostic, usize)>>,
     current_path: Option<lsp::Url>,
     format: DiagnosticsFormat,
-) -> Picker<PickerDiagnostic> {
+) -> DiagnosticsPicker {
     // TODO: drop current_path comparison and instead use workspace: bool flag?
 
     // flatten the map to a vec of (url, diag) pairs
@@ -360,6 +362,7 @@ fn diag_picker(
     };
 
     Picker::new(
+        vec![],
         flat_diag,
         (styles, format),
         move |cx,
@@ -1079,7 +1082,7 @@ fn goto_impl(
             editor.set_error("No definition found.");
         }
         _locations => {
-            let picker = Picker::new(locations, cwdir, move |cx, location, action| {
+            let picker = Picker::new(vec![], locations, cwdir, move |cx, location, action| {
                 jump_to_location(cx.editor, location, offset_encoding, action)
             })
             .with_preview(move |_editor, location| Some(location_to_file_location(location)));
