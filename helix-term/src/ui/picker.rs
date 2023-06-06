@@ -223,7 +223,7 @@ impl<T> Picker<T> {
 
         let mut prompts = Vec::with_capacity(columns.len());
         let mut previous_patterns = Vec::with_capacity(columns.len());
-        for _ in columns {
+        for _ in 0..columns.len() {
             prompts.push(Prompt::new(
                 "".into(),
                 None,
@@ -424,6 +424,10 @@ impl<T> Picker<T> {
     /// Move the cursor up by exactly one page. After the first page comes the last page.
     pub fn page_down(&mut self) {
         self.move_by(self.completion_height as usize, Direction::Forward);
+    }
+
+    pub fn focus_next_column(&mut self) {
+        self.column = (self.column + 1) % self.columns.len();
     }
 
     /// Move the cursor to the first entry
@@ -873,6 +877,9 @@ impl<T: 'static> Component for Picker<T> {
             }
             ctrl!('t') => {
                 self.toggle_preview();
+            }
+            ctrl!('f') => {
+                self.focus_next_column();
             }
             _ => {
                 self.prompt_handle_event(event, ctx);

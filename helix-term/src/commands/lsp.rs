@@ -278,7 +278,7 @@ fn sym_picker(symbols: Vec<SymbolInformationItem>, current_path: Option<lsp::Url
         }),
     ];
 
-    Picker::new(columns, symbols, move |cx, item, action| {
+    let mut picker = Picker::new(columns, symbols, move |cx, item, action| {
         let (view, doc) = current!(cx.editor);
         push_jump(view, doc);
 
@@ -312,7 +312,13 @@ fn sym_picker(symbols: Vec<SymbolInformationItem>, current_path: Option<lsp::Url
         }
     })
     .truncate_start(false)
-    .with_preview(move |_editor, item| Some(location_to_file_location(&item.symbol.location)))
+    .with_preview(move |_editor, item| Some(location_to_file_location(&item.symbol.location)));
+
+    // Start with focus on the symbol name column.
+    // TODO: have a helper for choosing a particular column? By index?
+    picker.focus_next_column();
+
+    picker
 }
 
 #[derive(Copy, Clone, PartialEq)]
