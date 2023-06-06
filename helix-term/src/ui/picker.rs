@@ -22,7 +22,10 @@ use tui::{
 use fuzzy_matcher::skim::SkimMatcherV2 as Matcher;
 use tui::widgets::Widget;
 
-use std::cmp::{self, Ordering};
+use std::{
+    borrow::Cow,
+    cmp::{self, Ordering},
+};
 use std::{collections::HashMap, io::Read, path::PathBuf};
 
 use crate::ui::{Prompt, PromptEvent};
@@ -116,9 +119,65 @@ impl Preview<'_, '_> {
 
 type PickerCallback<T> = Box<dyn Fn(&mut Context, &T, Action)>;
 
-pub struct Picker<T: Item> {
+pub struct Column<Item, Data> {
+    name: &'static str,
+    sort: bool,
+    filter: bool,
+    format_fn: Box<dyn Fn(&Item, Data) -> Cell>,
+    sort_text_fn: Option<Box<dyn Fn(&Item, Data) -> Cow<str>>>,
+    filter_text_fn: Option<Box<dyn Fn(&Item, Data) -> Cow<str>>>,
+}
+
+impl<Item, Data> Column<Item, Data> {
+    pub fn new(name: &'static str, format: impl Fn(&Item, Data) -> Cell + 'static) -> Self {
+        Self {
+            name,
+            sort: true,
+            filter: true,
+            format_fn: Box::new(format),
+            sort_text_fn: None,
+            filter_text_fn: None,
+        }
+    }
+
+    pub fn with_sort_text(mut self, sort_text: impl Fn(&Item, Data) -> Cow<str> + 'static) -> Self {
+        self.sort_text_fn = Some(Box::new(sort_text));
+        self
+    }
+
+    pub fn with_filter_text(
+        mut self,
+        filter_text: impl Fn(&Item, Data) -> Cow<str> + 'static,
+    ) -> Self {
+        self.filter_text_fn = Some(Box::new(filter_text));
+        self
+    }
+
+    pub fn as_display_only(mut self) -> Self {
+        self.sort = false;
+        self.filter = false;
+        self
+    }
+
+    fn format(&self, item: &Item, data: Data) -> Cell {
+        self.format_fn(item, data)
+    }
+
+    fn filter_text(&self, item: &Item, data: Data) -> Cow<str> {
+        match self.filter_text_fn {
+            Some(filter_text_fn) => filter_text_fn(item, data),
+            None => self.format_fn(item, data).content.into(),
+        }
+    }
+}
+
+// hopslotmap of columns?
+
+pub struct Picker<T, Data> {
+    columns: Vec<Column<T, Data>>,
+    active_column: usize,
     options: Vec<T>,
-    editor_data: T::Data,
+    editor_data: Data,
     // filter: String,
     matcher: Box<Matcher>,
     matches: Vec<PickerMatch>,
@@ -128,7 +187,7 @@ pub struct Picker<T: Item> {
 
     cursor: usize,
     // pattern: String,
-    prompt: Prompt,
+    prompts: Prompt,
     previous_pattern: (String, FuzzyQuery),
     /// Whether to show the preview panel (default true)
     show_preview: bool,
@@ -144,26 +203,34 @@ pub struct Picker<T: Item> {
     callback_fn: PickerCallback<T>,
 }
 
-impl<T: Item + 'static> Picker<T> {
+impl<T, Data> Picker<T, Data> {
     pub fn new(
+        columns: Vec<Column<T, Data>>,
         options: Vec<T>,
-        editor_data: T::Data,
+        editor_data: Data,
         callback_fn: impl Fn(&mut Context, &T, Action) + 'static,
     ) -> Self {
-        let prompt = Prompt::new(
-            "".into(),
-            None,
-            ui::completers::none,
-            |_editor: &mut Context, _pattern: &str, _event: PromptEvent| {},
-        );
+        assert!(!columns.is_empty());
+
+        let mut prompts = Vec::with_capacity(columns.len());
+        for _ in columns {
+            prompts.push(Prompt::new(
+                "".into(),
+                None,
+                ui::completers::none,
+                |_editor: &mut Context, _pattern: &str, _event: PromptEvent| {},
+            ));
+        }
 
         let mut picker = Self {
+            columns,
+            active_column: 0,
             options,
             editor_data,
             matcher: Box::default(),
             matches: Vec::new(),
             cursor: 0,
-            prompt,
+            prompts,
             previous_pattern: (String::new(), FuzzyQuery::default()),
             show_preview: true,
             callback_fn: Box::new(callback_fn),
@@ -715,7 +782,7 @@ impl<T: Item + 'static> Picker<T> {
     }
 }
 
-impl<T: Item + 'static> Component for Picker<T> {
+impl<T, Data> Component for Picker<T, Data> {
     fn render(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
         // +---------+ +---------+
         // |prompt   | |preview  |
@@ -868,16 +935,16 @@ pub type DynQueryCallback<T> =
 
 /// A picker that updates its contents via a callback whenever the
 /// query string changes. Useful for live grep, workspace symbols, etc.
-pub struct DynamicPicker<T: ui::menu::Item + Send> {
-    file_picker: Picker<T>,
+pub struct DynamicPicker<T: Send, Data> {
+    file_picker: Picker<T, Data>,
     query_callback: DynQueryCallback<T>,
     query: String,
 }
 
-impl<T: ui::menu::Item + Send> DynamicPicker<T> {
+impl<T: Send, Data> DynamicPicker<T, Data> {
     pub const ID: &'static str = "dynamic-picker";
 
-    pub fn new(file_picker: Picker<T>, query_callback: DynQueryCallback<T>) -> Self {
+    pub fn new(file_picker: Picker<T, Data>, query_callback: DynQueryCallback<T>) -> Self {
         Self {
             file_picker,
             query_callback,
@@ -886,7 +953,7 @@ impl<T: ui::menu::Item + Send> DynamicPicker<T> {
     }
 }
 
-impl<T: Item + Send + 'static> Component for DynamicPicker<T> {
+impl<T, Data> Component for DynamicPicker<T, Data> {
     fn render(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
         self.file_picker.render(area, surface, cx);
     }
@@ -908,7 +975,7 @@ impl<T: Item + Send + 'static> Component for DynamicPicker<T> {
             let callback = Callback::EditorCompositor(Box::new(move |editor, compositor| {
                 // Wrapping of pickers in overlay is done outside the picker code,
                 // so this is fragile and will break if wrapped in some other widget.
-                let picker = match compositor.find_id::<Overlay<DynamicPicker<T>>>(Self::ID) {
+                let picker = match compositor.find_id::<Overlay<DynamicPicker<T, Data>>>(Self::ID) {
                     Some(overlay) => &mut overlay.content.file_picker,
                     None => return,
                 };

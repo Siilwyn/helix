@@ -101,35 +101,6 @@ impl ui::menu::Item for lsp::Location {
     }
 }
 
-struct SymbolInformationItem {
-    symbol: lsp::SymbolInformation,
-    offset_encoding: OffsetEncoding,
-}
-
-impl ui::menu::Item for SymbolInformationItem {
-    /// Path to currently focussed document
-    type Data = Option<lsp::Url>;
-
-    fn format(&self, current_doc_path: &Self::Data) -> Row {
-        if current_doc_path.as_ref() == Some(&self.symbol.location.uri) {
-            self.symbol.name.as_str().into()
-        } else {
-            match self.symbol.location.uri.to_file_path() {
-                Ok(path) => {
-                    let get_relative_path = path::get_relative_path(path.as_path());
-                    format!(
-                        "{} ({})",
-                        &self.symbol.name,
-                        get_relative_path.to_string_lossy()
-                    )
-                    .into()
-                }
-                Err(_) => format!("{} ({})", &self.symbol.name, &self.symbol.location.uri).into(),
-            }
-        }
-    }
-}
-
 struct DiagnosticStyles {
     hint: Style,
     info: Style,
@@ -236,43 +207,117 @@ fn jump_to_location(
     align_view(doc, view, Align::Center);
 }
 
-type SymbolPicker = Picker<SymbolInformationItem>;
+fn display_symbol_kind(kind: lsp::SymbolKind) -> &'static str {
+    match kind {
+        lsp::SymbolKind::FILE => "file",
+        lsp::SymbolKind::MODULE => "module",
+        lsp::SymbolKind::NAMESPACE => "namespace",
+        lsp::SymbolKind::PACKAGE => "package",
+        lsp::SymbolKind::CLASS => "class",
+        lsp::SymbolKind::METHOD => "method",
+        lsp::SymbolKind::PROPERTY => "property",
+        lsp::SymbolKind::FIELD => "field",
+        lsp::SymbolKind::CONSTRUCTOR => "construct",
+        lsp::SymbolKind::ENUM => "enum",
+        lsp::SymbolKind::INTERFACE => "interface",
+        lsp::SymbolKind::FUNCTION => "function",
+        lsp::SymbolKind::VARIABLE => "variable",
+        lsp::SymbolKind::CONSTANT => "constant",
+        lsp::SymbolKind::STRING => "string",
+        lsp::SymbolKind::NUMBER => "number",
+        lsp::SymbolKind::BOOLEAN => "boolean",
+        lsp::SymbolKind::ARRAY => "array",
+        lsp::SymbolKind::OBJECT => "object",
+        lsp::SymbolKind::KEY => "key",
+        lsp::SymbolKind::NULL => "null",
+        lsp::SymbolKind::ENUM_MEMBER => "enummem",
+        lsp::SymbolKind::STRUCT => "struct",
+        lsp::SymbolKind::EVENT => "event",
+        lsp::SymbolKind::OPERATOR => "operator",
+        lsp::SymbolKind::TYPE_PARAMETER => "typeparam",
+        _ => {
+            log::warn!("Unknown symbol kind: {:?}", kind);
+            ""
+        }
+    }
+}
+
+struct SymbolInformationItem {
+    symbol: lsp::SymbolInformation,
+    offset_encoding: OffsetEncoding,
+}
+
+type SymbolPicker = Picker<SymbolInformationItem, Option<lsp::Url>>;
 
 fn sym_picker(symbols: Vec<SymbolInformationItem>, current_path: Option<lsp::Url>) -> SymbolPicker {
-    // TODO: drop current_path comparison and instead use workspace: bool flag?
-    Picker::new(symbols, current_path.clone(), move |cx, item, action| {
-        let (view, doc) = current!(cx.editor);
-        push_jump(view, doc);
+    let columns = vec![
+        ui::PickerColumn::new("Type", |item: &SymbolInformationItem, _| {
+            display_symbol_kind(item.symbol.kind).into()
+        }),
+        ui::PickerColumn::new(
+            "Name",
+            |item: &SymbolInformationItem, current_doc_path: Option<lsp::Url>| {
+                if current_doc_path.as_ref() == Some(&item.symbol.location.uri) {
+                    item.symbol.name.as_str().into()
+                } else {
+                    match item.symbol.location.uri.to_file_path() {
+                        Ok(path) => {
+                            let get_relative_path = path::get_relative_path(path.as_path());
+                            format!(
+                                "{} ({})",
+                                &item.symbol.name,
+                                get_relative_path.to_string_lossy()
+                            )
+                            .into()
+                        }
+                        Err(_) => {
+                            format!("{} ({})", &item.symbol.name, &item.symbol.location.uri).into()
+                        }
+                    }
+                }
+            },
+        ),
+    ];
 
-        if current_path.as_ref() != Some(&item.symbol.location.uri) {
-            let uri = &item.symbol.location.uri;
-            let path = match uri.to_file_path() {
-                Ok(path) => path,
-                Err(_) => {
-                    let err = format!("unable to convert URI to filepath: {}", uri);
+    // TODO: drop current_path comparison and instead use workspace: bool flag?
+    Picker::new(
+        columns,
+        symbols,
+        current_path.clone(),
+        move |cx, item, action| {
+            let (view, doc) = current!(cx.editor);
+            push_jump(view, doc);
+
+            if current_path.as_ref() != Some(&item.symbol.location.uri) {
+                let uri = &item.symbol.location.uri;
+                let path = match uri.to_file_path() {
+                    Ok(path) => path,
+                    Err(_) => {
+                        let err = format!("unable to convert URI to filepath: {}", uri);
+                        cx.editor.set_error(err);
+                        return;
+                    }
+                };
+                if let Err(err) = cx.editor.open(&path, action) {
+                    let err = format!("failed to open document: {}: {}", uri, err);
+                    log::error!("{}", err);
                     cx.editor.set_error(err);
                     return;
                 }
-            };
-            if let Err(err) = cx.editor.open(&path, action) {
-                let err = format!("failed to open document: {}: {}", uri, err);
-                log::error!("{}", err);
-                cx.editor.set_error(err);
-                return;
             }
-        }
 
-        let (view, doc) = current!(cx.editor);
+            let (view, doc) = current!(cx.editor);
 
-        if let Some(range) =
-            lsp_range_to_range(doc.text(), item.symbol.location.range, item.offset_encoding)
-        {
-            // we flip the range so that the cursor sits on the start of the symbol
-            // (for example start of the function).
-            doc.set_selection(view.id, Selection::single(range.head, range.anchor));
-            align_view(doc, view, Align::Center);
-        }
-    })
+            if let Some(range) =
+                lsp_range_to_range(doc.text(), item.symbol.location.range, item.offset_encoding)
+            {
+                // we flip the range so that the cursor sits on the start of the symbol
+                // (for example start of the function).
+                doc.set_selection(view.id, Selection::single(range.head, range.anchor));
+                align_view(doc, view, Align::Center);
+            }
+        },
+    )
     .truncate_start(false)
     .with_preview(move |_editor, item| Some(location_to_file_location(&item.symbol.location)))
 }
