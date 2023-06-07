@@ -2531,17 +2531,6 @@ fn buffer_picker(cx: &mut Context) {
     }
 
     let columns = vec![
-        ui::PickerColumn::new("ID", |meta: &BufferMeta| meta.id.to_string().into()),
-        ui::PickerColumn::new("Flags", |meta: &BufferMeta| {
-            let mut flags = String::new();
-            if meta.is_modified {
-                flags.push('+');
-            }
-            if meta.is_current {
-                flags.push('*');
-            }
-            flags.into()
-        }),
         ui::PickerColumn::new("Path", |meta: &BufferMeta| {
             let path = meta
                 .path
@@ -2552,6 +2541,17 @@ fn buffer_picker(cx: &mut Context) {
                 .unwrap_or(SCRATCH_BUFFER_NAME)
                 .to_string()
                 .into()
+        }),
+        ui::PickerColumn::new("ID", |meta: &BufferMeta| meta.id.to_string().into()),
+        ui::PickerColumn::new("Flags", |meta: &BufferMeta| {
+            let mut flags = String::new();
+            if meta.is_modified {
+                flags.push('+');
+            }
+            if meta.is_current {
+                flags.push('*');
+            }
+            flags.into()
         }),
     ];
     // TODO: something on Picker to disable the table header.
