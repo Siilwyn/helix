@@ -37,7 +37,6 @@ use std::{
     collections::{BTreeMap, HashSet},
     fmt::Write,
     future::Future,
-    path::PathBuf,
     sync::Arc,
 };
 
@@ -61,40 +60,6 @@ macro_rules! language_server_with_feature {
             }
         }
     }};
-}
-
-impl ui::menu::Item for lsp::Location {
-    /// Current working directory.
-    type Data = PathBuf;
-
-    fn format(&self, cwdir: &Self::Data) -> Row {
-        // The preallocation here will overallocate a few characters since it will account for the
-        // URL's scheme, which is not used most of the time since that scheme will be "file://".
-        // Those extra chars will be used to avoid allocating when writing the line number (in the
-        // common case where it has 5 digits or less, which should be enough for a cast majority
-        // of usages).
-        let mut res = String::with_capacity(self.uri.as_str().len());
-
-        if self.uri.scheme() == "file" {
-            // With the preallocation above and UTF-8 paths already, this closure will do one (1)
-            // allocation, for `to_file_path`, else there will be two (2), with `to_string_lossy`.
-            let mut write_path_to_res = || -> Option<()> {
-                let path = self.uri.to_file_path().ok()?;
-                res.push_str(&path.strip_prefix(cwdir).unwrap_or(&path).to_string_lossy());
-                Some(())
-            };
-            write_path_to_res();
-        } else {
-            // Never allocates since we declared the string with this capacity already.
-            res.push_str(self.uri.as_str());
-        }
-
-        // Most commonly, this will not allocate, especially on Unix systems where the root prefix
-        // is a simple `/` and not `C:\` (with whatever drive letter)
-        write!(&mut res, ":{}", self.range.start.line + 1)
-            .expect("Will only failed if allocating fail");
-        res.into()
-    }
 }
 
 struct PickerDiagnostic {
@@ -1073,8 +1038,6 @@ fn goto_impl(
     locations: Vec<lsp::Location>,
     offset_encoding: OffsetEncoding,
 ) {
-    // let cwdir = std::env::current_dir().unwrap_or_default();
-
     match locations.as_slice() {
         [location] => {
             jump_to_location(editor, location, offset_encoding, Action::Replace);
@@ -1083,8 +1046,38 @@ fn goto_impl(
             editor.set_error("No definition found.");
         }
         _locations => {
-            // vec![] takes cwdir
-            let picker = Picker::new(vec![], locations, move |cx, location, action| {
+            let columns = vec![ui::PickerColumn::new("", |item: &lsp::Location| {
+                // The preallocation here will overallocate a few characters since it will account for the
+                // URL's scheme, which is not used most of the time since that scheme will be "file://".
+                // Those extra chars will be used to avoid allocating when writing the line number (in the
+                // common case where it has 5 digits or less, which should be enough for a cast majority
+                // of usages).
+                let mut res = String::with_capacity(item.uri.as_str().len());
+
+                if item.uri.scheme() == "file" {
+                    // With the preallocation above and UTF-8 paths already, this closure will do one (1)
+                    // allocation, for `to_file_path`, else there will be two (2), with `to_string_lossy`.
+                    if let Some(path) = item.uri.to_file_path().ok() {
+                        res.push_str(
+                            &path
+                                .strip_prefix(std::env::current_dir().unwrap_or_default())
+                                .unwrap_or(&path)
+                                .to_string_lossy(),
+                        );
+                    }
+                } else {
+                    // Never allocates since we declared the string with this capacity already.
+                    res.push_str(item.uri.as_str());
+                }
+
+                // Most commonly, this will not allocate, especially on Unix systems where the root prefix
+                // is a simple `/` and not `C:\` (with whatever drive letter)
+                write!(&mut res, ":{}", item.range.start.line + 1)
+                    .expect("Will only failed if allocating fail");
+                res.into()
+            })];
+
+            let picker = Picker::new(columns, locations, move |cx, location, action| {
                 jump_to_location(cx.editor, location, offset_encoding, action)
             })
             .with_preview(move |_editor, location| Some(location_to_file_location(location)));
