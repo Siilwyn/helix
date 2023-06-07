@@ -217,8 +217,14 @@ pub fn file_picker(root: PathBuf, config: &helix_view::editor::Config) -> Picker
 
     log::debug!("file_picker init {:?}", Instant::now().duration_since(now));
 
-    // vec![] takes root
-    Picker::new(vec![], files, move |cx, path: &PathBuf, action| {
+    let columns = vec![PickerColumn::new("", move |item: &PathBuf| {
+        item.strip_prefix(root.clone())
+            .unwrap_or(item)
+            .to_string_lossy()
+            .into()
+    })];
+
+    Picker::new(columns, files, move |cx, path: &PathBuf, action| {
         if let Err(e) = cx.editor.open(path, action) {
             let err = if let Some(err) = e.source() {
                 format!("{}", err)

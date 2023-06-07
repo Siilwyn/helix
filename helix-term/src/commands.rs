@@ -2132,7 +2132,7 @@ fn global_search(cx: &mut Context) {
         },
     );
 
-    // let current_path = doc_mut!(cx.editor).path().cloned();
+    let current_path = doc_mut!(cx.editor).path().cloned();
 
     let show_picker = async move {
         let all_matches: Vec<FileResult> =
@@ -2144,8 +2144,23 @@ fn global_search(cx: &mut Context) {
                     return;
                 }
 
+                let columns = vec![ui::PickerColumn::new("", move |item: &FileResult| {
+                    let relative_path = helix_core::path::get_relative_path(&item.path)
+                        .to_string_lossy()
+                        .into_owned();
+                    if current_path
+                        .as_ref()
+                        .map(|p| p == &item.path)
+                        .unwrap_or(false)
+                    {
+                        format!("{} (*)", relative_path).into()
+                    } else {
+                        relative_path.into()
+                    }
+                })];
+
                 let picker = Picker::new(
-                    vec![], // takes current_path
+                    columns,
                     all_matches,
                     move |cx, FileResult { path, line_num }, action| {
                         match cx.editor.open(path, action) {
