@@ -123,15 +123,7 @@ pub struct Column<T> {
     // This will be used when we start rendering the table header for pickers with >1 column.
     #[allow(dead_code)]
     name: &'static str,
-    // TODO: currently these are dead code. Ideally DynPickers could use a
-    // "display only" column for the entry of their query so that we wouldn't
-    // exclude valid results:
-    // * https://github.com/helix-editor/helix/issues/5714
-    // * https://github.com/helix-editor/helix/pull/4687#issuecomment-1364586418
-    // Then Picker would look for the first column with 'filter: true' and use
-    // that for filtering and same for sorting.
-    sort: bool,
-    filter: bool,
+    display_only: bool,
     format_fn: Box<dyn Fn(&T) -> Cell>,
     sort_text_fn: Option<Box<dyn Fn(&T) -> Cow<str>>>,
     filter_text_fn: Option<Box<dyn Fn(&T) -> Cow<str>>>,
@@ -141,8 +133,7 @@ impl<T> Column<T> {
     pub fn new(name: &'static str, format: impl Fn(&T) -> Cell + 'static) -> Self {
         Self {
             name,
-            sort: true,
-            filter: true,
+            display_only: false,
             format_fn: Box::new(format),
             sort_text_fn: None,
             filter_text_fn: None,
@@ -160,8 +151,7 @@ impl<T> Column<T> {
     }
 
     pub fn as_display_only(mut self) -> Self {
-        self.sort = false;
-        self.filter = false;
+        self.display_only = true;
         self
     }
 
@@ -317,14 +307,15 @@ impl<T> Picker<T> {
     }
 
     pub fn score(&mut self) {
-        let pattern = self.prompts[0].line();
+        let column = self.first_scoring_column();
+        let pattern = self.prompts[column].line();
 
-        let previous_pattern = &self.previous_patterns[0].0;
+        let previous_pattern = &self.previous_patterns[column].0;
         if pattern == previous_pattern {
             return;
         }
 
-        let (query, is_refined) = self.previous_patterns[0]
+        let (query, is_refined) = self.previous_patterns[column]
             .1
             .refine(pattern, &previous_pattern);
 
@@ -333,7 +324,7 @@ impl<T> Picker<T> {
             self.matches.clear();
             self.matches
                 .extend(self.options.iter().enumerate().map(|(index, option)| {
-                    let text = self.columns[0].filter_text(option);
+                    let text = self.columns[column].filter_text(option);
                     PickerMatch {
                         index,
                         score: 0,
@@ -345,7 +336,7 @@ impl<T> Picker<T> {
             // then we can score the filtered set.
             self.matches.retain_mut(|pmatch| {
                 let option = &self.options[pmatch.index];
-                let text = self.columns[0].sort_text(option);
+                let text = self.columns[column].sort_text(option);
 
                 match query.fuzzy_match(&text, &self.matcher) {
                     Some(s) => {
@@ -364,14 +355,15 @@ impl<T> Picker<T> {
 
         // reset cursor position
         self.cursor = 0;
-        let pattern = self.prompts[0].line();
-        let previous_pattern = &mut self.previous_patterns[0];
+        let pattern = self.prompts[column].line();
+        let previous_pattern = &mut self.previous_patterns[column];
         previous_pattern.0.clone_from(pattern);
         previous_pattern.1 = query;
     }
 
     pub fn force_score(&mut self) {
-        let pattern = self.prompts[0].line();
+        let column = self.first_scoring_column();
+        let pattern = self.prompts[column].line();
 
         let query = FuzzyQuery::new(pattern);
         self.matches.clear();
@@ -380,7 +372,7 @@ impl<T> Picker<T> {
                 .iter()
                 .enumerate()
                 .filter_map(|(index, option)| {
-                    let text = self.columns[0].filter_text(option);
+                    let text = self.columns[column].filter_text(option);
 
                     query
                         .fuzzy_match(&text, &self.matcher)
@@ -393,6 +385,15 @@ impl<T> Picker<T> {
         );
 
         self.matches.sort_unstable();
+    }
+
+    /// Finds the index of the first non-display-only column.
+    fn first_scoring_column(&self) -> usize {
+        self.columns
+            .iter()
+            .enumerate()
+            .find_map(|(i, column)| (!column.display_only).then_some(i))
+            .expect("at least one column must allow scoring")
     }
 
     pub fn truncate_start(mut self, truncate_start: bool) -> Self {
@@ -624,6 +625,9 @@ impl<T> Picker<T> {
                     // TODO: only draw matching parts for the active column? That would make it
                     // clearer which column is active. Or maybe use a separate theme scope for the
                     // inactive columns?
+
+                    // TODO: skip highlighting for display only columns? That will help in cases
+                    // like https://github.com/helix-editor/helix/issues/5714.
 
                     let (_score, highlights) = FuzzyQuery::new(self.prompts[column_idx].line())
                         .fuzzy_indices(&line, &self.matcher)

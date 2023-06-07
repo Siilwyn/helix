@@ -2132,10 +2132,10 @@ fn global_search(cx: &mut Context) {
                 }
 
                 let columns = vec![
-                    // TODO: as_display_only()
                     ui::PickerColumn::new("Contents", |item: &FileResult| {
                         item.line_content.as_str().into()
-                    }),
+                    })
+                    .as_display_only(),
                     ui::PickerColumn::new("Path", move |item: &FileResult| {
                         let relative_path = helix_core::path::get_relative_path(&item.path)
                             .to_string_lossy()
