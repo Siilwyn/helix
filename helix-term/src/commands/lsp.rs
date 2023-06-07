@@ -249,36 +249,69 @@ struct SymbolInformationItem {
 
 type SymbolPicker = Picker<SymbolInformationItem>;
 
-fn sym_picker(symbols: Vec<SymbolInformationItem>, current_path: Option<lsp::Url>) -> SymbolPicker {
+enum SymbolPickerScope {
+    Document,
+    Workspace,
+}
+
+fn sym_picker(
+    symbols: Vec<SymbolInformationItem>,
+    current_path: Option<lsp::Url>,
+    scope: SymbolPickerScope,
+) -> SymbolPicker {
     // TODO: drop current_path comparison and instead use workspace: bool flag?
     let doc_current_path = current_path.clone();
-    let columns = vec![
-        ui::PickerColumn::new("Type", |item: &SymbolInformationItem| {
-            display_symbol_kind(item.symbol.kind).into()
-        }),
-        ui::PickerColumn::new("Name", move |item: &SymbolInformationItem| {
-            if doc_current_path.as_ref() == Some(&item.symbol.location.uri) {
-                item.symbol.name.as_str().into()
-            } else {
-                match item.symbol.location.uri.to_file_path() {
-                    Ok(path) => {
-                        let get_relative_path = path::get_relative_path(path.as_path());
-                        format!(
-                            "{} ({})",
-                            &item.symbol.name,
-                            get_relative_path.to_string_lossy()
-                        )
-                        .into()
-                    }
-                    Err(_) => {
-                        format!("{} ({})", &item.symbol.name, &item.symbol.location.uri).into()
+    let symbol_type_column = ui::PickerColumn::new("Type", |item: &SymbolInformationItem| {
+        display_symbol_kind(item.symbol.kind).into()
+    });
+
+    let columns = match scope {
+        SymbolPickerScope::Document => vec![
+            // Some symbols in the document symbol picker may have a URI that isn't
+            // the current file. It should be rare though, so we concatenate that
+            // URI in with the symbol name in this picker.
+            ui::PickerColumn::new("Name", move |item: &SymbolInformationItem| {
+                if doc_current_path.as_ref() == Some(&item.symbol.location.uri) {
+                    item.symbol.name.as_str().into()
+                } else {
+                    match item.symbol.location.uri.to_file_path() {
+                        Ok(path) => {
+                            let get_relative_path = path::get_relative_path(path.as_path());
+                            format!(
+                                "{} ({})",
+                                &item.symbol.name,
+                                get_relative_path.to_string_lossy()
+                            )
+                            .into()
+                        }
+                        Err(_) => {
+                            format!("{} ({})", &item.symbol.name, &item.symbol.location.uri).into()
+                        }
                     }
                 }
-            }
-        }),
-    ];
+            }),
+            symbol_type_column,
+        ],
+        SymbolPickerScope::Workspace => vec![
+            ui::PickerColumn::new("Name", |item: &SymbolInformationItem| {
+                item.symbol.name.as_str().into()
+            })
+            .as_display_only()
+            .as_dynamic(),
+            symbol_type_column,
+            ui::PickerColumn::new("Path", |item: &SymbolInformationItem| {
+                match item.symbol.location.uri.to_file_path() {
+                    Ok(path) => path::get_relative_path(path.as_path())
+                        .to_string_lossy()
+                        .to_string()
+                        .into(),
+                    Err(_) => item.symbol.location.uri.to_string().into(),
+                }
+            }),
+        ],
+    };
 
-    let mut picker = Picker::new(columns, symbols, move |cx, item, action| {
+    Picker::new(columns, symbols, move |cx, item, action| {
         let (view, doc) = current!(cx.editor);
         push_jump(view, doc);
 
@@ -312,13 +345,7 @@ fn sym_picker(symbols: Vec<SymbolInformationItem>, current_path: Option<lsp::Url
         }
     })
     .truncate_start(false)
-    .with_preview(move |_editor, item| Some(location_to_file_location(&item.symbol.location)));
-
-    // Start with focus on the symbol name column.
-    // TODO: have a helper for choosing a particular column? By index?
-    picker.rotate_left();
-
-    picker
+    .with_preview(move |_editor, item| Some(location_to_file_location(&item.symbol.location)))
 }
 
 #[derive(Copy, Clone, PartialEq)]
@@ -474,7 +501,7 @@ pub fn symbol_picker(cx: &mut Context) {
             symbols.append(&mut lsp_items);
         }
         let call = move |_editor: &mut Editor, compositor: &mut Compositor| {
-            let picker = sym_picker(symbols, current_url);
+            let picker = sym_picker(symbols, current_url, SymbolPickerScope::Document);
             compositor.push(Box::new(overlaid(picker)))
         };
 
@@ -533,7 +560,7 @@ pub fn workspace_symbol_picker(cx: &mut Context) {
     cx.jobs.callback(async move {
         let symbols = initial_symbols.await?;
         let call = move |_editor: &mut Editor, compositor: &mut Compositor| {
-            let picker = sym_picker(symbols, current_url);
+            let picker = sym_picker(symbols, current_url, SymbolPickerScope::Workspace);
             let dyn_picker = DynamicPicker::new(picker, Box::new(get_symbols));
             compositor.push(Box::new(overlaid(dyn_picker)))
         };

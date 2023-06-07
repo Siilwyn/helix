@@ -124,6 +124,7 @@ pub struct Column<T> {
     #[allow(dead_code)]
     name: &'static str,
     display_only: bool,
+    dynamic: bool,
     format_fn: Box<dyn Fn(&T) -> Cell>,
     sort_text_fn: Option<Box<dyn Fn(&T) -> Cow<str>>>,
     filter_text_fn: Option<Box<dyn Fn(&T) -> Cow<str>>>,
@@ -134,6 +135,7 @@ impl<T> Column<T> {
         Self {
             name,
             display_only: false,
+            dynamic: false,
             format_fn: Box::new(format),
             sort_text_fn: None,
             filter_text_fn: None,
@@ -152,6 +154,11 @@ impl<T> Column<T> {
 
     pub fn as_display_only(mut self) -> Self {
         self.display_only = true;
+        self
+    }
+
+    pub fn as_dynamic(mut self) -> Self {
+        self.dynamic = true;
         self
     }
 
@@ -215,6 +222,8 @@ impl<T> Picker<T> {
         callback_fn: impl Fn(&mut Context, &T, Action) + 'static,
     ) -> Self {
         assert!(!columns.is_empty());
+        // At most one column may be dynamic (see DynPicker).
+        assert!(columns.iter().filter(|column| column.dynamic).count() <= 1);
 
         let mut prompts = Vec::with_capacity(columns.len());
         let mut previous_patterns = Vec::with_capacity(columns.len());
@@ -394,6 +403,14 @@ impl<T> Picker<T> {
             .enumerate()
             .find_map(|(i, column)| (!column.display_only).then_some(i))
             .expect("at least one column must allow scoring")
+    }
+
+    /// Finds the index of the dynamic column, if one exists.
+    fn dynamic_column(&self) -> Option<usize> {
+        self.columns
+            .iter()
+            .enumerate()
+            .find_map(|(i, column)| column.dynamic.then_some(i))
     }
 
     pub fn truncate_start(mut self, truncate_start: bool) -> Self {
@@ -987,7 +1004,11 @@ impl<T: Send + 'static> Component for DynamicPicker<T> {
 
     fn handle_event(&mut self, event: &Event, cx: &mut Context) -> EventResult {
         let event_result = self.file_picker.handle_event(event, cx);
-        let current_query = self.file_picker.line();
+        let column = self
+            .file_picker
+            .dynamic_column()
+            .expect("dynamic pickers must have exactly one dynamic column");
+        let current_query = self.file_picker.prompts[column].line();
 
         if !matches!(event, Event::IdleTimeout) || self.query == *current_query {
             return event_result;
