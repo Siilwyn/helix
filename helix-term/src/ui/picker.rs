@@ -314,6 +314,11 @@ impl<T> Picker<T> {
         self
     }
 
+    pub fn with_line(mut self, line: String, editor: &Editor) -> Self {
+        self.prompts[self.column].set_line(line, editor);
+        self
+    }
+
     pub fn score(&mut self) {
         let pattern = self.prompts[self.column].line();
 
