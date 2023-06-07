@@ -2005,13 +2005,15 @@ fn global_search(cx: &mut Context) {
         path: PathBuf,
         /// 0 indexed lines
         line_num: usize,
+        line_content: String,
     }
 
     impl FileResult {
-        fn new(path: &Path, line_num: usize) -> Self {
+        fn new(path: &Path, line_num: usize, line_content: String) -> Self {
             Self {
                 path: path.to_path_buf(),
                 line_num,
+                line_content,
             }
         }
     }
@@ -2087,9 +2089,13 @@ fn global_search(cx: &mut Context) {
                             let result = searcher.search_path(
                                 &matcher,
                                 entry.path(),
-                                sinks::UTF8(|line_num, _| {
+                                sinks::UTF8(|line_num, line_content| {
                                     all_matches_sx
-                                        .send(FileResult::new(entry.path(), line_num as usize - 1))
+                                        .send(FileResult::new(
+                                            entry.path(),
+                                            line_num as usize - 1,
+                                            line_content.to_string(),
+                                        ))
                                         .unwrap();
 
                                     Ok(true)
@@ -2125,25 +2131,31 @@ fn global_search(cx: &mut Context) {
                     return;
                 }
 
-                let columns = vec![ui::PickerColumn::new("", move |item: &FileResult| {
-                    let relative_path = helix_core::path::get_relative_path(&item.path)
-                        .to_string_lossy()
-                        .into_owned();
-                    if current_path
-                        .as_ref()
-                        .map(|p| p == &item.path)
-                        .unwrap_or(false)
-                    {
-                        format!("{} (*)", relative_path).into()
-                    } else {
-                        relative_path.into()
-                    }
-                })];
+                let columns = vec![
+                    // TODO: as_display_only()
+                    ui::PickerColumn::new("Contents", |item: &FileResult| {
+                        item.line_content.as_str().into()
+                    }),
+                    ui::PickerColumn::new("Path", move |item: &FileResult| {
+                        let relative_path = helix_core::path::get_relative_path(&item.path)
+                            .to_string_lossy()
+                            .into_owned();
+                        if current_path
+                            .as_ref()
+                            .map(|p| p == &item.path)
+                            .unwrap_or(false)
+                        {
+                            format!("{} (*)", relative_path).into()
+                        } else {
+                            relative_path.into()
+                        }
+                    }),
+                ];
 
                 let picker = Picker::new(
                     columns,
                     all_matches,
-                    move |cx, FileResult { path, line_num }, action| {
+                    move |cx, FileResult { path, line_num, .. }, action| {
                         match cx.editor.open(path, action) {
                             Ok(_) => {}
                             Err(e) => {
@@ -2168,7 +2180,7 @@ fn global_search(cx: &mut Context) {
 
                         doc.set_selection(view.id, Selection::single(start, end));
                         align_view(doc, view, Align::Center);
-                    }).with_preview(|_editor, FileResult { path, line_num }| {
+                    }).with_preview(|_editor, FileResult { path, line_num, .. }| {
                         Some((path.clone().into(), Some((*line_num, *line_num))))
                     },
                 );
