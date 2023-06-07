@@ -10,10 +10,7 @@ use helix_lsp::{
 };
 use serde_json::Value;
 use tokio_stream::StreamExt;
-use tui::{
-    text::{Span, Spans},
-    widgets::Row,
-};
+use tui::{text::Span, widgets::Row};
 
 use super::{align_view, push_jump, Align, Context, Editor, Open};
 
@@ -23,7 +20,6 @@ use helix_core::{
 use helix_view::{
     document::{DocumentInlayHints, DocumentInlayHintsId, Mode},
     editor::Action,
-    theme::Style,
     Document, View,
 };
 
@@ -101,60 +97,10 @@ impl ui::menu::Item for lsp::Location {
     }
 }
 
-struct DiagnosticStyles {
-    hint: Style,
-    info: Style,
-    warning: Style,
-    error: Style,
-}
-
 struct PickerDiagnostic {
     url: lsp::Url,
     diag: lsp::Diagnostic,
     offset_encoding: OffsetEncoding,
-}
-
-impl ui::menu::Item for PickerDiagnostic {
-    type Data = (DiagnosticStyles, DiagnosticsFormat);
-
-    fn format(&self, (styles, format): &Self::Data) -> Row {
-        let mut style = self
-            .diag
-            .severity
-            .map(|s| match s {
-                DiagnosticSeverity::HINT => styles.hint,
-                DiagnosticSeverity::INFORMATION => styles.info,
-                DiagnosticSeverity::WARNING => styles.warning,
-                DiagnosticSeverity::ERROR => styles.error,
-                _ => Style::default(),
-            })
-            .unwrap_or_default();
-
-        // remove background as it is distracting in the picker list
-        style.bg = None;
-
-        let code = match self.diag.code.as_ref() {
-            Some(NumberOrString::Number(n)) => format!(" ({n})"),
-            Some(NumberOrString::String(s)) => format!(" ({s})"),
-            None => String::new(),
-        };
-
-        let path = match format {
-            DiagnosticsFormat::HideSourcePath => String::new(),
-            DiagnosticsFormat::ShowSourcePath => {
-                let file_path = self.url.to_file_path().unwrap();
-                let path = path::get_truncated_path(file_path);
-                format!("{}: ", path.to_string_lossy())
-            }
-        };
-
-        Spans::from(vec![
-            Span::raw(path),
-            Span::styled(&self.diag.message, style),
-            Span::styled(code, style),
-        ])
-        .into()
-    }
 }
 
 fn location_to_file_location(location: &lsp::Location) -> FileLocation {
@@ -360,7 +306,7 @@ fn diag_picker(
     cx: &Context,
     diagnostics: BTreeMap<lsp::Url, Vec<(lsp::Diagnostic, usize)>>,
     current_path: Option<lsp::Url>,
-    _format: DiagnosticsFormat,
+    format: DiagnosticsFormat,
 ) -> DiagnosticsPicker {
     // TODO: drop current_path comparison and instead use workspace: bool flag?
 
@@ -380,15 +326,45 @@ fn diag_picker(
         }
     }
 
-    // let styles = DiagnosticStyles {
-    //     hint: cx.editor.theme.get("hint"),
-    //     info: cx.editor.theme.get("info"),
-    //     warning: cx.editor.theme.get("warning"),
-    //     error: cx.editor.theme.get("error"),
-    // };
+    let hint = cx.editor.theme.get("hint");
+    let info = cx.editor.theme.get("info");
+    let warning = cx.editor.theme.get("warning");
+    let error = cx.editor.theme.get("error");
+
+    let mut columns = vec![
+        // TODO color message or just severity?
+        ui::PickerColumn::new("Message", move |item: &PickerDiagnostic| {
+            item.diag.message.as_str().into()
+        }),
+        ui::PickerColumn::new("Severity", move |item: &PickerDiagnostic| {
+            match item.diag.severity {
+                Some(DiagnosticSeverity::HINT) => Span::styled("HINT", hint),
+                Some(DiagnosticSeverity::INFORMATION) => Span::styled("INFO", info),
+                Some(DiagnosticSeverity::WARNING) => Span::styled("WARN", warning),
+                Some(DiagnosticSeverity::ERROR) => Span::styled("ERROR", error),
+                _ => Span::raw(""),
+            }
+            .into()
+        }),
+        ui::PickerColumn::new("Code", move |item: &PickerDiagnostic| {
+            match item.diag.code.as_ref() {
+                Some(NumberOrString::Number(n)) => n.to_string().into(),
+                Some(NumberOrString::String(s)) => s.as_str().into(),
+                None => "".into(),
+            }
+        }),
+    ];
+
+    if format == DiagnosticsFormat::ShowSourcePath {
+        columns.push(ui::PickerColumn::new("Path", |item: &PickerDiagnostic| {
+            let file_path = item.url.to_file_path().unwrap();
+            let path = path::get_truncated_path(file_path);
+            path.to_string_lossy().to_string().into()
+        }));
+    }
 
     Picker::new(
-        vec![], // takes (styles, format)
+        columns,
         flat_diag,
         move |cx,
               PickerDiagnostic {
