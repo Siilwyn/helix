@@ -71,8 +71,19 @@ fn thread_picker(
                 return;
             }
             // let debugger = debugger!(editor);
-
             // let thread_states = debugger.thread_states.clone();
+
+            // let columns = vec![
+            //     ui::PickerColumn::new("Name", |item: &Thread| item.name.as_str().into()),
+            //     ui::PickerColumn::new("State", move |item: &Thread| {
+            //         thread_states
+            //             .get(&item.id)
+            //             .map(|state| state.as_str())
+            //             .unwrap_or("unknown")
+            //             .into()
+            //     }),
+            // ];
+
             let picker = Picker::new(
                 vec![], // takes thread_states
                 threads,
