@@ -2016,25 +2016,6 @@ fn global_search(cx: &mut Context) {
         }
     }
 
-    impl ui::menu::Item for FileResult {
-        type Data = Option<PathBuf>;
-
-        fn format(&self, current_path: &Self::Data) -> Row {
-            let relative_path = helix_core::path::get_relative_path(&self.path)
-                .to_string_lossy()
-                .into_owned();
-            if current_path
-                .as_ref()
-                .map(|p| p == &self.path)
-                .unwrap_or(false)
-            {
-                format!("{} (*)", relative_path).into()
-            } else {
-                relative_path.into()
-            }
-        }
-    }
-
     let (all_matches_sx, all_matches_rx) = tokio::sync::mpsc::unbounded_channel::<FileResult>();
     let config = cx.editor.config();
     let smart_case = config.search.smart_case;
@@ -2538,30 +2519,31 @@ fn buffer_picker(cx: &mut Context) {
         focused_at: std::time::Instant,
     }
 
-    impl ui::menu::Item for BufferMeta {
-        type Data = ();
-
-        fn format(&self, _data: &Self::Data) -> Row {
-            let path = self
+    let columns = vec![
+        ui::PickerColumn::new("ID", |meta: &BufferMeta| meta.id.to_string().into()),
+        ui::PickerColumn::new("Flags", |meta: &BufferMeta| {
+            let mut flags = String::new();
+            if meta.is_modified {
+                flags.push('+');
+            }
+            if meta.is_current {
+                flags.push('*');
+            }
+            flags.into()
+        }),
+        ui::PickerColumn::new("Path", |meta: &BufferMeta| {
+            let path = meta
                 .path
                 .as_deref()
                 .map(helix_core::path::get_relative_path);
-            let path = match path.as_deref().and_then(Path::to_str) {
-                Some(path) => path,
-                None => SCRATCH_BUFFER_NAME,
-            };
-
-            let mut flags = String::new();
-            if self.is_modified {
-                flags.push('+');
-            }
-            if self.is_current {
-                flags.push('*');
-            }
-
-            Row::new([self.id.to_string(), flags, path.to_string()])
-        }
-    }
+            path.as_deref()
+                .and_then(Path::to_str)
+                .unwrap_or(SCRATCH_BUFFER_NAME)
+                .to_string()
+                .into()
+        }),
+    ];
+    // TODO: something on Picker to disable the table header.
 
     let new_meta = |doc: &Document| BufferMeta {
         id: doc.id(),
@@ -2581,7 +2563,7 @@ fn buffer_picker(cx: &mut Context) {
     // mru
     items.sort_unstable_by_key(|item| std::cmp::Reverse(item.focused_at));
 
-    let picker = Picker::new(vec![], items, |cx, meta, action| {
+    let picker = Picker::new(columns, items, |cx, meta, action| {
         cx.editor.switch(meta.id, action);
     })
     .with_preview(|editor, meta| {
@@ -2603,33 +2585,6 @@ fn jumplist_picker(cx: &mut Context) {
         selection: Selection,
         text: String,
         is_current: bool,
-    }
-
-    impl ui::menu::Item for JumpMeta {
-        type Data = ();
-
-        fn format(&self, _data: &Self::Data) -> Row {
-            let path = self
-                .path
-                .as_deref()
-                .map(helix_core::path::get_relative_path);
-            let path = match path.as_deref().and_then(Path::to_str) {
-                Some(path) => path,
-                None => SCRATCH_BUFFER_NAME,
-            };
-
-            let mut flags = Vec::new();
-            if self.is_current {
-                flags.push("*");
-            }
-
-            let flag = if flags.is_empty() {
-                "".into()
-            } else {
-                format!(" ({})", flags.join(""))
-            };
-            format!("{} {}{} {}", self.id, path, flag, self.text).into()
-        }
     }
 
     for (view, _) in cx.editor.tree.views_mut() {
@@ -2658,8 +2613,32 @@ fn jumplist_picker(cx: &mut Context) {
         }
     };
 
+    let columns = vec![ui::PickerColumn::new("", |item: &JumpMeta| {
+        let path = item
+            .path
+            .as_deref()
+            .map(helix_core::path::get_relative_path);
+        let path = match path.as_deref().and_then(Path::to_str) {
+            Some(path) => path,
+            None => SCRATCH_BUFFER_NAME,
+        };
+
+        let mut flags = Vec::new();
+        if item.is_current {
+            flags.push("*");
+        }
+
+        let flag = if flags.is_empty() {
+            "".into()
+        } else {
+            format!(" ({})", flags.join(""))
+        };
+        // TODO: split this into different columns.
+        format!("{} {}{} {}", item.id, path, flag, item.text).into()
+    })];
+
     let picker = Picker::new(
-        vec![],
+        columns,
         cx.editor
             .tree
             .views()
