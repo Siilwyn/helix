@@ -771,13 +771,6 @@ pub fn code_action(cx: &mut Context) {
     });
 }
 
-impl ui::menu::Item for lsp::Command {
-    type Data = ();
-    fn format(&self, _data: &Self::Data) -> Row {
-        self.title.as_str().into()
-    }
-}
-
 pub fn execute_lsp_command(editor: &mut Editor, language_server_id: usize, cmd: lsp::Command) {
     // the command is executed on the server and communicated back
     // to the client asynchronously using workspace edits
