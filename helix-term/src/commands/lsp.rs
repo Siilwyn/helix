@@ -316,7 +316,7 @@ fn sym_picker(symbols: Vec<SymbolInformationItem>, current_path: Option<lsp::Url
 
     // Start with focus on the symbol name column.
     // TODO: have a helper for choosing a particular column? By index?
-    picker.focus_next_column();
+    picker.rotate_left();
 
     picker
 }

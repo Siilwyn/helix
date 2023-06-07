@@ -193,8 +193,6 @@ impl<T> Column<T> {
 
 pub struct Picker<T> {
     columns: Vec<Column<T>>,
-    /// The index of the currently focused column
-    column: usize,
     options: Vec<T>,
     // TODO: vec of these?
     matcher: Box<Matcher>,
@@ -242,7 +240,6 @@ impl<T> Picker<T> {
 
         let mut picker = Self {
             columns,
-            column: 0,
             options,
             matcher: Box::default(),
             matches: Vec::new(),
@@ -267,7 +264,7 @@ impl<T> Picker<T> {
         picker
             .matches
             .extend(picker.options.iter().enumerate().map(|(index, option)| {
-                let text = picker.columns[picker.column].filter_text(option);
+                let text = picker.columns[0].filter_text(option);
                 PickerMatch {
                     index,
                     score: 0,
@@ -315,19 +312,19 @@ impl<T> Picker<T> {
     }
 
     pub fn with_line(mut self, line: String, editor: &Editor) -> Self {
-        self.prompts[self.column].set_line(line, editor);
+        self.prompts[0].set_line(line, editor);
         self
     }
 
     pub fn score(&mut self) {
-        let pattern = self.prompts[self.column].line();
+        let pattern = self.prompts[0].line();
 
-        let previous_pattern = &self.previous_patterns[self.column].0;
+        let previous_pattern = &self.previous_patterns[0].0;
         if pattern == previous_pattern {
             return;
         }
 
-        let (query, is_refined) = self.previous_patterns[self.column]
+        let (query, is_refined) = self.previous_patterns[0]
             .1
             .refine(pattern, &previous_pattern);
 
@@ -336,7 +333,7 @@ impl<T> Picker<T> {
             self.matches.clear();
             self.matches
                 .extend(self.options.iter().enumerate().map(|(index, option)| {
-                    let text = self.columns[self.column].filter_text(option);
+                    let text = self.columns[0].filter_text(option);
                     PickerMatch {
                         index,
                         score: 0,
@@ -348,7 +345,7 @@ impl<T> Picker<T> {
             // then we can score the filtered set.
             self.matches.retain_mut(|pmatch| {
                 let option = &self.options[pmatch.index];
-                let text = self.columns[self.column].sort_text(option);
+                let text = self.columns[0].sort_text(option);
 
                 match query.fuzzy_match(&text, &self.matcher) {
                     Some(s) => {
@@ -367,14 +364,14 @@ impl<T> Picker<T> {
 
         // reset cursor position
         self.cursor = 0;
-        let pattern = self.prompts[self.column].line();
-        let previous_pattern = &mut self.previous_patterns[self.column];
+        let pattern = self.prompts[0].line();
+        let previous_pattern = &mut self.previous_patterns[0];
         previous_pattern.0.clone_from(pattern);
         previous_pattern.1 = query;
     }
 
     pub fn force_score(&mut self) {
-        let pattern = self.prompts[self.column].line();
+        let pattern = self.prompts[0].line();
 
         let query = FuzzyQuery::new(pattern);
         self.matches.clear();
@@ -383,7 +380,7 @@ impl<T> Picker<T> {
                 .iter()
                 .enumerate()
                 .filter_map(|(index, option)| {
-                    let text = self.columns[self.column].filter_text(option);
+                    let text = self.columns[0].filter_text(option);
 
                     query
                         .fuzzy_match(&text, &self.matcher)
@@ -438,8 +435,11 @@ impl<T> Picker<T> {
         self.move_by(self.completion_height as usize, Direction::Forward);
     }
 
-    pub fn focus_next_column(&mut self) {
-        self.column = (self.column + 1) % self.columns.len();
+    pub fn rotate_left(&mut self) {
+        self.columns.rotate_left(1);
+        self.prompts.rotate_left(1);
+        self.previous_patterns.rotate_left(1);
+        self.widths.rotate_left(1);
     }
 
     /// Move the cursor to the first entry
@@ -459,7 +459,7 @@ impl<T> Picker<T> {
     }
 
     pub fn line(&self) -> &String {
-        self.prompts[self.column].line()
+        self.prompts[0].line()
     }
 
     pub fn toggle_preview(&mut self) {
@@ -467,7 +467,7 @@ impl<T> Picker<T> {
     }
 
     fn prompt_handle_event(&mut self, event: &Event, cx: &mut Context) -> EventResult {
-        if let EventResult::Consumed(_) = self.prompts[self.column].handle_event(event, cx) {
+        if let EventResult::Consumed(_) = self.prompts[0].handle_event(event, cx) {
             // TODO: recalculate only if pattern changed
             self.score();
         }
@@ -580,7 +580,7 @@ impl<T> Picker<T> {
             text_style,
         );
 
-        self.prompts[self.column].render(area, surface, cx);
+        self.prompts[0].render(area, surface, cx);
 
         // -- Separator
         let sep_style = cx.editor.theme.get("ui.background.separator");
@@ -899,7 +899,7 @@ impl<T: 'static> Component for Picker<T> {
             // C-f is not ideal, it should be a scrolling keybind (C-f/C-b should
             // be the current C-u/C-d and C-u/C-d should move half-pages.).
             ctrl!('f') => {
-                self.focus_next_column();
+                self.rotate_left();
             }
             _ => {
                 self.prompt_handle_event(event, ctx);
@@ -917,7 +917,7 @@ impl<T: 'static> Component for Picker<T> {
         // prompt area
         let area = inner.clip_left(1).with_height(1);
 
-        self.prompts[self.column].cursor(area, ctx)
+        self.prompts[0].cursor(area, ctx)
     }
 
     fn required_size(&mut self, (width, height): (u16, u16)) -> Option<(u16, u16)> {
