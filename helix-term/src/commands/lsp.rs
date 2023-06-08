@@ -1039,7 +1039,9 @@ fn goto_impl(
             editor.set_error("No definition found.");
         }
         _locations => {
-            let columns = vec![ui::PickerColumn::new("", |item: &lsp::Location| {
+            let cwdir = std::env::current_dir().unwrap_or_default();
+
+            let columns = vec![ui::PickerColumn::new("", move |item: &lsp::Location| {
                 // The preallocation here will overallocate a few characters since it will account for the
                 // URL's scheme, which is not used most of the time since that scheme will be "file://".
                 // Those extra chars will be used to avoid allocating when writing the line number (in the
@@ -1051,12 +1053,7 @@ fn goto_impl(
                     // With the preallocation above and UTF-8 paths already, this closure will do one (1)
                     // allocation, for `to_file_path`, else there will be two (2), with `to_string_lossy`.
                     if let Some(path) = item.uri.to_file_path().ok() {
-                        res.push_str(
-                            &path
-                                .strip_prefix(std::env::current_dir().unwrap_or_default())
-                                .unwrap_or(&path)
-                                .to_string_lossy(),
-                        );
+                        res.push_str(&path.strip_prefix(&cwdir).unwrap_or(&path).to_string_lossy());
                     }
                 } else {
                     // Never allocates since we declared the string with this capacity already.
