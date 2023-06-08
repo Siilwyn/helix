@@ -316,24 +316,27 @@ impl<T> Picker<T> {
     }
 
     pub fn score(&mut self) {
-        let column = self.first_scoring_column();
-        let pattern = self.prompts[column].line();
+        if self.columns[0].display_only {
+            return;
+        }
 
-        let previous_pattern = &self.previous_patterns[column].0;
+        let pattern = self.prompts[0].line();
+
+        let previous_pattern = &self.previous_patterns[0].0;
         if pattern == previous_pattern {
             return;
         }
 
-        let (query, is_refined) = self.previous_patterns[column]
+        let (query, is_refined) = self.previous_patterns[0]
             .1
             .refine(pattern, &previous_pattern);
 
-        if pattern.is_empty() {
+        if self.prompts.iter().all(|prompt| prompt.line().is_empty()) {
             // Fast path for no pattern.
             self.matches.clear();
             self.matches
                 .extend(self.options.iter().enumerate().map(|(index, option)| {
-                    let text = self.columns[column].filter_text(option);
+                    let text = self.columns[0].filter_text(option);
                     PickerMatch {
                         index,
                         score: 0,
@@ -342,10 +345,10 @@ impl<T> Picker<T> {
                 }));
         } else if is_refined {
             // optimization: if the pattern is a more specific version of the previous one
-            // then we can score the filtered set.
+            // then we can score the filtered set and only consider the current column.
             self.matches.retain_mut(|pmatch| {
                 let option = &self.options[pmatch.index];
-                let text = self.columns[column].sort_text(option);
+                let text = self.columns[0].sort_text(option);
 
                 match query.fuzzy_match(&text, &self.matcher) {
                     Some(s) => {
@@ -364,45 +367,59 @@ impl<T> Picker<T> {
 
         // reset cursor position
         self.cursor = 0;
-        let pattern = self.prompts[column].line();
-        let previous_pattern = &mut self.previous_patterns[column];
+        let pattern = self.prompts[0].line();
+        let previous_pattern = &mut self.previous_patterns[0];
         previous_pattern.0.clone_from(pattern);
         previous_pattern.1 = query;
     }
 
+    /// Recompute the score for all options across all columns.
     pub fn force_score(&mut self) {
-        let column = self.first_scoring_column();
-        let pattern = self.prompts[column].line();
-
-        let query = FuzzyQuery::new(pattern);
-        self.matches.clear();
-        self.matches.extend(
-            self.options
-                .iter()
-                .enumerate()
-                .filter_map(|(index, option)| {
-                    let text = self.columns[column].filter_text(option);
-
-                    query
-                        .fuzzy_match(&text, &self.matcher)
-                        .map(|score| PickerMatch {
-                            index,
-                            score,
-                            len: text.chars().count(),
-                        })
-                }),
-        );
-
-        self.matches.sort_unstable();
-    }
-
-    /// Finds the index of the first non-display-only column.
-    fn first_scoring_column(&self) -> usize {
-        self.columns
+        let queries: Vec<_> = self
+            .prompts
             .iter()
             .enumerate()
-            .find_map(|(i, column)| (!column.display_only).then_some(i))
-            .expect("at least one column must allow scoring")
+            .filter(|(i, _prompt)| !self.columns[*i].display_only)
+            .map(|(_i, prompt)| FuzzyQuery::new(prompt.line()))
+            .collect();
+
+        self.matches.clear();
+        self.matches
+            .extend(
+                self.options
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(option_index, option)| {
+                        let mut score = None;
+                        let mut len = None;
+                        for (query_index, column) in self
+                            .columns
+                            .iter()
+                            .filter(|column| !column.display_only)
+                            .enumerate()
+                        {
+                            let text = column.filter_text(option);
+
+                            // Exclude items that fail to match on every column.
+                            let s = queries[query_index].fuzzy_match(&text, &self.matcher)?;
+
+                            // Sort by the first non-display-only column.
+                            score = Some(s);
+                            len.get_or_insert_with(|| text.chars().count());
+                        }
+
+                        let score = score.expect("at least one column must be non-display-only");
+                        let len = len.unwrap();
+
+                        Some(PickerMatch {
+                            index: option_index,
+                            score,
+                            len,
+                        })
+                    }),
+            );
+
+        self.matches.sort_unstable();
     }
 
     /// Finds the index of the dynamic column, if one exists.
