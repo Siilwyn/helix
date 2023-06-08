@@ -1,3 +1,4 @@
+pub mod column;
 mod completion;
 mod document;
 pub(crate) mod editor;
@@ -21,7 +22,7 @@ pub use completion::{Completion, CompletionItem};
 pub use editor::EditorView;
 pub use markdown::Markdown;
 pub use menu::Menu;
-pub use picker::{Column as PickerColumn, DynamicPicker, FileLocation, Picker};
+pub use picker::{DynamicPicker, FileLocation, Picker};
 pub use popup::Popup;
 pub use prompt::{Prompt, PromptEvent};
 pub use spinner::{ProgressSpinners, Spinner};
@@ -217,12 +218,9 @@ pub fn file_picker(root: PathBuf, config: &helix_view::editor::Config) -> Picker
 
     log::debug!("file_picker init {:?}", Instant::now().duration_since(now));
 
-    let columns = vec![PickerColumn::new("", move |item: &PathBuf| {
-        item.strip_prefix(root.clone())
-            .unwrap_or(item)
-            .to_string_lossy()
-            .into()
-    })];
+    let columns =
+        vec![Box::new(column::PathColumn { prefix: root })
+            as Box<dyn column::Column<Item = PathBuf>>];
 
     Picker::new(columns, files, move |cx, path: &PathBuf, action| {
         if let Err(e) = cx.editor.open(path, action) {

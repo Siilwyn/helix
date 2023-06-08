@@ -22,10 +22,7 @@ use tui::{
 use fuzzy_matcher::skim::SkimMatcherV2 as Matcher;
 use tui::widgets::Widget;
 
-use std::{
-    borrow::Cow,
-    cmp::{self, Ordering},
-};
+use std::cmp::{self, Ordering};
 use std::{collections::HashMap, io::Read, path::PathBuf};
 
 use crate::ui::{Prompt, PromptEvent};
@@ -41,7 +38,7 @@ use helix_view::{
     Document, DocumentId, Editor,
 };
 
-use super::overlay::Overlay;
+use super::{column::Column, overlay::Overlay};
 
 pub const MIN_AREA_WIDTH_FOR_PREVIEW: u16 = 72;
 /// Biggest file size to preview in bytes
@@ -119,77 +116,10 @@ impl Preview<'_, '_> {
 
 type PickerCallback<T> = Box<dyn Fn(&mut Context, &T, Action)>;
 
-pub struct Column<T> {
-    // This will be used when we start rendering the table header for pickers with >1 column.
-    #[allow(dead_code)]
-    name: &'static str,
-    display_only: bool,
-    dynamic: bool,
-    format_fn: Box<dyn Fn(&T) -> Cell>,
-    sort_text_fn: Option<Box<dyn Fn(&T) -> Cow<str>>>,
-    filter_text_fn: Option<Box<dyn Fn(&T) -> Cow<str>>>,
-}
-
-impl<T> Column<T> {
-    pub fn new(name: &'static str, format: impl Fn(&T) -> Cell + 'static) -> Self {
-        Self {
-            name,
-            display_only: false,
-            dynamic: false,
-            format_fn: Box::new(format),
-            sort_text_fn: None,
-            filter_text_fn: None,
-        }
-    }
-
-    pub fn with_sort_text(mut self, sort_text: impl Fn(&T) -> Cow<str> + 'static) -> Self {
-        self.sort_text_fn = Some(Box::new(sort_text));
-        self
-    }
-
-    pub fn with_filter_text(mut self, filter_text: impl Fn(&T) -> Cow<str> + 'static) -> Self {
-        self.filter_text_fn = Some(Box::new(filter_text));
-        self
-    }
-
-    pub fn as_display_only(mut self) -> Self {
-        self.display_only = true;
-        self
-    }
-
-    pub fn as_dynamic(mut self) -> Self {
-        self.dynamic = true;
-        self
-    }
-
-    fn format<'a>(&self, item: &'a T) -> Cell<'a> {
-        (self.format_fn)(item)
-    }
-
-    fn format_text<'a>(&self, item: &'a T) -> Cow<'a, str> {
-        let text: String = self.format(item).content.into();
-        text.into()
-    }
-
-    fn filter_text<'a>(&self, item: &'a T) -> Cow<'a, str> {
-        match &self.filter_text_fn {
-            Some(filter_text_fn) => filter_text_fn(item),
-            None => self.format_text(item),
-        }
-    }
-
-    fn sort_text<'a>(&self, item: &'a T) -> Cow<'a, str> {
-        match &self.sort_text_fn {
-            Some(sort_text_fn) => sort_text_fn(item),
-            None => self.format_text(item),
-        }
-    }
-}
-
 // hopslotmap of columns?
 
 pub struct Picker<T> {
-    columns: Vec<Column<T>>,
+    columns: Vec<Box<dyn Column<Item = T>>>,
     options: Vec<T>,
     // TODO: vec of these?
     matcher: Box<Matcher>,
@@ -217,13 +147,11 @@ pub struct Picker<T> {
 
 impl<T> Picker<T> {
     pub fn new(
-        columns: Vec<Column<T>>,
+        columns: Vec<Box<dyn Column<Item = T>>>,
         options: Vec<T>,
         callback_fn: impl Fn(&mut Context, &T, Action) + 'static,
     ) -> Self {
         assert!(!columns.is_empty());
-        // At most one column may be dynamic (see DynPicker).
-        assert!(columns.iter().filter(|column| column.dynamic).count() <= 1);
 
         let mut prompts = Vec::with_capacity(columns.len());
         let mut previous_patterns = Vec::with_capacity(columns.len());

@@ -6,6 +6,7 @@ pub use dap::*;
 use helix_vcs::Hunk;
 pub use lsp::*;
 use tokio::sync::oneshot;
+use tui::widgets::Cell;
 pub use typed::*;
 
 use helix_core::{
@@ -53,8 +54,12 @@ use crate::{
     filter_picker_entry,
     job::Callback,
     ui::{
-        self, editor::InsertEvent, lsp::SignatureHelp, overlay::overlaid, CompletionItem,
-        DynamicPicker, Picker, Popup, Prompt, PromptEvent,
+        self,
+        column::{Column, SimpleColumn},
+        editor::InsertEvent,
+        lsp::SignatureHelp,
+        overlay::overlaid,
+        CompletionItem, DynamicPicker, Picker, Popup, Prompt, PromptEvent,
     },
 };
 
@@ -2016,6 +2021,33 @@ fn global_search(cx: &mut Context) {
         }
     }
 
+    struct PathColumn {
+        current_path: Option<PathBuf>,
+    }
+    impl Column for PathColumn {
+        type Item = FileResult;
+
+        fn name(&self) -> &str {
+            "path"
+        }
+
+        fn format<'a>(&self, item: &'a Self::Item) -> Cell<'a> {
+            let relative_path = helix_core::path::get_relative_path(&item.path)
+                .to_string_lossy()
+                .into_owned();
+            if self
+                .current_path
+                .as_ref()
+                .map(|p| p == &item.path)
+                .unwrap_or(false)
+            {
+                format!("{} (*)", relative_path).into()
+            } else {
+                relative_path.into()
+            }
+        }
+    }
+
     let config = cx.editor.config();
     let smart_case = config.search.smart_case;
     let file_picker_config = config.file_picker.clone();
@@ -2129,25 +2161,10 @@ fn global_search(cx: &mut Context) {
                 let current_path = doc!(editor).path().cloned();
 
                 let columns = vec![
-                    ui::PickerColumn::new("Contents", |item: &FileResult| {
+                    Box::new(PathColumn { current_path }) as Box<dyn Column<Item = FileResult>>,
+                    Box::new(SimpleColumn::new("contents", |item: &FileResult| {
                         item.line_content.as_str().into()
-                    })
-                    .as_display_only()
-                    .as_dynamic(),
-                    ui::PickerColumn::new("Path", move |item: &FileResult| {
-                        let relative_path = helix_core::path::get_relative_path(&item.path)
-                            .to_string_lossy()
-                            .into_owned();
-                        if current_path
-                            .as_ref()
-                            .map(|p| p == &item.path)
-                            .unwrap_or(false)
-                        {
-                            format!("{} (*)", relative_path).into()
-                        } else {
-                            relative_path.into()
-                        }
-                    }),
+                    })),
                 ];
 
                 let picker = Picker::new(
@@ -2531,8 +2548,8 @@ fn buffer_picker(cx: &mut Context) {
     }
 
     let columns = vec![
-        ui::PickerColumn::new("Path", |meta: &BufferMeta| {
-            let path = meta
+        Box::new(SimpleColumn::new("path", |item: &BufferMeta| {
+            let path = item
                 .path
                 .as_deref()
                 .map(helix_core::path::get_relative_path);
@@ -2541,18 +2558,20 @@ fn buffer_picker(cx: &mut Context) {
                 .unwrap_or(SCRATCH_BUFFER_NAME)
                 .to_string()
                 .into()
-        }),
-        ui::PickerColumn::new("ID", |meta: &BufferMeta| meta.id.to_string().into()),
-        ui::PickerColumn::new("Flags", |meta: &BufferMeta| {
+        })) as Box<dyn Column<Item = BufferMeta>>,
+        Box::new(SimpleColumn::new("id", |item: &BufferMeta| {
+            item.id.to_string().into()
+        })),
+        Box::new(SimpleColumn::new("flags", |item: &BufferMeta| {
             let mut flags = String::new();
-            if meta.is_modified {
+            if item.is_modified {
                 flags.push('+');
             }
-            if meta.is_current {
+            if item.is_current {
                 flags.push('*');
             }
             flags.into()
-        }),
+        })),
     ];
     // TODO: something on Picker to disable the table header.
 
@@ -2598,6 +2617,29 @@ fn jumplist_picker(cx: &mut Context) {
         is_current: bool,
     }
 
+    let columns = vec![
+        Box::new(SimpleColumn::new("id", |item: &JumpMeta| {
+            item.id.to_string().into()
+        })) as Box<dyn Column<Item = JumpMeta>>,
+        Box::new(SimpleColumn::new("path", |item: &JumpMeta| {
+            let path = item
+                .path
+                .as_deref()
+                .map(helix_core::path::get_relative_path);
+
+            path.as_deref()
+                .and_then(Path::to_str)
+                .unwrap_or(SCRATCH_BUFFER_NAME)
+                .into()
+        })),
+        Box::new(SimpleColumn::new("flags", |item: &JumpMeta| {
+            if item.is_current { "*" } else { "" }.into()
+        })),
+        Box::new(SimpleColumn::new("contents", |item: &JumpMeta| {
+            item.text.into()
+        })),
+    ];
+
     for (view, _) in cx.editor.tree.views_mut() {
         for doc_id in view.jumps.iter().map(|e| e.0).collect::<Vec<_>>().iter() {
             let doc = doc_mut!(cx.editor, doc_id);
@@ -2623,30 +2665,6 @@ fn jumplist_picker(cx: &mut Context) {
             is_current: view.doc == doc_id,
         }
     };
-
-    let columns = vec![ui::PickerColumn::new("", |item: &JumpMeta| {
-        let path = item
-            .path
-            .as_deref()
-            .map(helix_core::path::get_relative_path);
-        let path = match path.as_deref().and_then(Path::to_str) {
-            Some(path) => path,
-            None => SCRATCH_BUFFER_NAME,
-        };
-
-        let mut flags = Vec::new();
-        if item.is_current {
-            flags.push("*");
-        }
-
-        let flag = if flags.is_empty() {
-            "".into()
-        } else {
-            format!(" ({})", flags.join(""))
-        };
-        // TODO: split this into different columns.
-        format!("{} {}{} {}", item.id, path, flag, item.text).into()
-    })];
 
     let picker = Picker::new(
         columns,
@@ -2676,6 +2694,35 @@ fn jumplist_picker(cx: &mut Context) {
 }
 
 pub fn command_palette(cx: &mut Context) {
+    struct BindingsColumn {
+        keymap: crate::keymap::ReverseKeymap,
+    }
+    impl Column for BindingsColumn {
+        type Item = MappableCommand;
+
+        fn name(&self) -> &str {
+            "bindings"
+        }
+
+        fn format<'a>(&self, item: &'a Self::Item) -> Cell<'a> {
+            self.keymap
+                .get(item.name())
+                .map(|bindings| {
+                    bindings.iter().fold(String::new(), |mut acc, bind| {
+                        if !acc.is_empty() {
+                            acc.push(' ');
+                        }
+                        for key in bind {
+                            acc.push_str(&key.key_sequence_format());
+                        }
+                        acc
+                    })
+                })
+                .unwrap_or_default()
+                .into()
+        }
+    }
+
     cx.callback = Some(Box::new(
         move |compositor: &mut Compositor, cx: &mut compositor::Context| {
             let keymap = compositor.find::<ui::EditorView>().unwrap().keymaps.map()
@@ -2692,28 +2739,17 @@ pub fn command_palette(cx: &mut Context) {
             }));
 
             let columns = vec![
-                ui::PickerColumn::new("Name", |item| match item {
-                    MappableCommand::Typable { name, .. } => format!(":{name}").into(),
-                    MappableCommand::Static { name, .. } => (*name).into(),
-                }),
-                ui::PickerColumn::new("Bindings", move |item: &MappableCommand| {
-                    keymap
-                        .get(item.name())
-                        .map(|bindings| {
-                            bindings.iter().fold(String::new(), |mut acc, bind| {
-                                if !acc.is_empty() {
-                                    acc.push(' ');
-                                }
-                                for key in bind {
-                                    acc.push_str(&key.key_sequence_format());
-                                }
-                                acc
-                            })
-                        })
-                        .unwrap_or_default()
-                        .into()
-                }),
-                ui::PickerColumn::new("Doc", |item: &MappableCommand| item.doc().into()),
+                Box::new(SimpleColumn::new(
+                    "name",
+                    |item: &MappableCommand| match item {
+                        MappableCommand::Typable { name, .. } => format!(":{name}").into(),
+                        MappableCommand::Static { name, .. } => (*name).into(),
+                    },
+                )) as Box<dyn Column<Item = MappableCommand>>,
+                Box::new(BindingsColumn { keymap }),
+                Box::new(SimpleColumn::new("docs", |item: &MappableCommand| {
+                    item.doc().into()
+                })),
             ];
 
             let picker = Picker::new(columns, commands, move |cx, command, _action| {
