@@ -265,6 +265,11 @@ impl<T> Picker<T> {
     /// Calculate the width constraints using the maximum widths of each column
     /// for the current options.
     fn calculate_column_widths(&mut self) {
+        // TODO: Construct a histogram for each column's width.
+        // Use something like P95 for the max width to reduce
+        // noisy outliers. If the total calculated width exceeds
+        // the available area while rendering, switch to percentage
+        // based constraints.
         let column_widths: Vec<_> = self
             .columns
             .iter()
