@@ -559,9 +559,6 @@ impl<T> Picker<T> {
     fn render_picker(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
         let text_style = cx.editor.theme.get("ui.text");
         let selected = cx.editor.theme.get("ui.text.focus");
-        // TODO: theme keys ui.picker.header.text, ui.picker.header.separator
-        let header_text_style = Style::default().fg(helix_view::theme::Color::Cyan);
-        let header_separator_style = Style::default().fg(helix_view::theme::Color::Cyan);
         let highlight_style = cx.editor.theme.get("special").add_modifier(Modifier::BOLD);
 
         // -- Render the frame:
@@ -749,31 +746,38 @@ impl<T> Picker<T> {
                     )
                 });
 
-        // TODO: flag to hide this?
-        let header = Row::new(self.columns.iter().zip(self.widths.iter()).map(
-            |(column, constraint)| {
-                let separator_len = constraint.apply(inner.width);
-                let separator: String = std::iter::repeat(borders.horizontal)
-                    .take(separator_len as usize)
-                    .collect();
-
-                Cell::from(tui::text::Text {
-                    lines: vec![
-                        Span::styled(column.name, header_text_style).into(),
-                        Span::styled(separator, header_separator_style).into(),
-                    ],
-                })
-            },
-        ))
-        .height(2);
-
-        let table = Table::new(options)
+        let mut table = Table::new(options)
             .style(text_style)
             .highlight_style(selected)
             .highlight_symbol(" > ")
             .column_spacing(1)
-            .widths(&self.widths)
-            .header(header);
+            .widths(&self.widths);
+
+        // -- Header
+        // TODO: theme keys ui.picker.header.text, ui.picker.header.separator
+        let header_text_style = Style::default().fg(helix_view::theme::Color::Cyan);
+        let header_separator_style = Style::default().fg(helix_view::theme::Color::Cyan);
+
+        if self.columns.len() > 1 {
+            table = table.header(
+                Row::new(self.columns.iter().zip(self.widths.iter()).map(
+                    |(column, constraint)| {
+                        let separator_len = constraint.apply(inner.width);
+                        let separator: String = std::iter::repeat(borders.horizontal)
+                            .take(separator_len as usize)
+                            .collect();
+
+                        Cell::from(tui::text::Text {
+                            lines: vec![
+                                Span::styled(column.name, header_text_style).into(),
+                                Span::styled(separator, header_separator_style).into(),
+                            ],
+                        })
+                    },
+                ))
+                .height(2),
+            );
+        }
 
         use tui::widgets::TableState;
 
