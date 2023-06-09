@@ -2,7 +2,6 @@ use std::fmt::Write;
 use std::ops::Deref;
 
 use crate::job::Job;
-use crate::ui::column::SimpleColumn;
 
 use super::*;
 
@@ -1358,11 +1357,10 @@ fn lsp_workspace_command(
         let callback = async move {
             let call: job::Callback = Callback::EditorCompositor(Box::new(
                 move |_editor: &mut Editor, compositor: &mut Compositor| {
-                    let columns = vec![Box::new(SimpleColumn::new(
+                    let columns = vec![ui::PickerColumn::new(
                         "name",
                         |item: &helix_lsp::lsp::Command| item.title.as_str().into(),
-                    ))
-                        as Box<dyn Column<Item = helix_lsp::lsp::Command>>];
+                    )];
                     let picker = ui::Picker::new(columns, commands, move |cx, command, _action| {
                         execute_lsp_command(cx.editor, language_server_id, command.clone());
                     });

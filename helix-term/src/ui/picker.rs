@@ -24,7 +24,10 @@ use tui::{
 use fuzzy_matcher::skim::SkimMatcherV2 as Matcher;
 use tui::widgets::Widget;
 
-use std::cmp::{self, Ordering};
+use std::{
+    borrow::Cow,
+    cmp::{self, Ordering},
+};
 use std::{collections::HashMap, io::Read, path::PathBuf};
 
 use crate::ui::{Prompt, PromptEvent};
@@ -40,7 +43,7 @@ use helix_view::{
     Document, DocumentId, Editor,
 };
 
-use super::{column::Column, overlay::Overlay};
+use super::overlay::Overlay;
 
 pub const MIN_AREA_WIDTH_FOR_PREVIEW: u16 = 72;
 /// Biggest file size to preview in bytes
@@ -118,11 +121,49 @@ impl Preview<'_, '_> {
 
 type PickerCallback<T> = Box<dyn Fn(&mut Context, &T, Action)>;
 
+pub struct Column<T> {
+    name: &'static str,
+    format_fn: Box<dyn Fn(&T) -> Cell>,
+    filter_text_fn: Option<Box<dyn Fn(&T) -> Cow<str>>>,
+}
+
+impl<T> Column<T> {
+    pub fn new(name: &'static str, format: impl Fn(&T) -> Cell + 'static) -> Self {
+        Self {
+            name,
+            format_fn: Box::new(format),
+            filter_text_fn: None,
+        }
+    }
+
+    pub fn with_filter_text(mut self, filter_text: impl Fn(&T) -> Cow<str> + 'static) -> Self {
+        self.filter_text_fn = Some(Box::new(filter_text));
+        self
+    }
+
+    fn format<'a>(&self, item: &'a T) -> Cell<'a> {
+        (self.format_fn)(item)
+    }
+
+    fn format_text<'a>(&self, item: &'a T) -> Cow<'a, str> {
+        let text: String = self.format(item).content.into();
+        text.into()
+    }
+
+    fn filter_text<'a>(&self, item: &'a T) -> Cow<'a, str> {
+        match &self.filter_text_fn {
+            Some(filter_text_fn) => filter_text_fn(item),
+            None => self.format_text(item),
+        }
+    }
+}
+
 // hopslotmap of columns?
 
 pub struct Picker<T> {
-    columns: Vec<Box<dyn Column<Item = T>>>,
+    // TODO: can we eliminate this?
     column_names: Vec<String>,
+    columns: Vec<Column<T>>,
     options: Vec<T>,
     // TODO: vec of these?
     matcher: Box<Matcher>,
@@ -150,7 +191,7 @@ pub struct Picker<T> {
 
 impl<T> Picker<T> {
     pub fn new(
-        columns: Vec<Box<dyn Column<Item = T>>>,
+        columns: Vec<Column<T>>,
         options: Vec<T>,
         callback_fn: impl Fn(&mut Context, &T, Action) + 'static,
     ) -> Self {
@@ -165,7 +206,7 @@ impl<T> Picker<T> {
 
         let column_names: Vec<_> = columns
             .iter()
-            .map(|column| column.name().to_string())
+            .map(|column| column.name.to_string())
             .collect();
 
         let previous_query = Query::new(&column_names, "");
@@ -585,7 +626,7 @@ impl<T> Picker<T> {
                     // like https://github.com/helix-editor/helix/issues/5714.
 
                     // TODO: restore highlighting for common.
-                    let (_score, highlights) = query.fields[column.name()]
+                    let (_score, highlights) = query.fields[column.name]
                         .2
                         .fuzzy_indices(&line, &self.matcher)
                         .unwrap_or_default();
@@ -946,7 +987,7 @@ impl<T: Send + 'static> Component for DynamicPicker<T> {
         let event_result = self.file_picker.handle_event(event, cx);
         let column = &self.file_picker.columns[self.dynamic_column];
         let query = self.file_picker.query();
-        let current_query = query.value(column.name());
+        let current_query = query.value(column.name);
 
         if !matches!(event, Event::IdleTimeout) || self.query == *current_query {
             return event_result;
