@@ -177,6 +177,8 @@ pub struct Picker<T> {
     previous_query: Query,
     /// Whether to show the preview panel (default true)
     show_preview: bool,
+    /// Whether to score the picker on changes to the prompt.
+    allow_scoring: bool,
     /// Constraints for tabular formatting
     widths: Vec<Constraint>,
 
@@ -221,6 +223,7 @@ impl<T> Picker<T> {
             prompt,
             previous_query,
             show_preview: true,
+            allow_scoring: true,
             callback_fn: Box::new(callback_fn),
             completion_height: 0,
             widths: Vec::new(),
@@ -247,13 +250,6 @@ impl<T> Picker<T> {
             }));
 
         picker
-    }
-
-    pub fn set_options(&mut self, new_options: Vec<T>) {
-        self.options = new_options;
-        self.cursor = 0;
-        self.force_score();
-        self.calculate_column_widths();
     }
 
     /// Calculate the width constraints using the maximum widths of each column
@@ -295,6 +291,10 @@ impl<T> Picker<T> {
     }
 
     pub fn score(&mut self) {
+        if !self.allow_scoring {
+            return;
+        }
+
         let query = self.query();
 
         if query == self.previous_query {
@@ -626,9 +626,12 @@ impl<T> Picker<T> {
                     // like https://github.com/helix-editor/helix/issues/5714.
 
                     // TODO: restore highlighting for common.
-                    let (_score, highlights) = query.fields[column.name]
-                        .2
-                        .fuzzy_indices(&line, &self.matcher)
+                    let (_score, highlights) = query
+                        .fields
+                        .get(column.name)
+                        .and_then(|(_, _, fuzzy_query)| {
+                            fuzzy_query.fuzzy_indices(&line, &self.matcher)
+                        })
                         .unwrap_or_default();
 
                     let highlight_byte_ranges: Vec<_> = line
@@ -965,16 +968,84 @@ impl<T: Send> DynamicPicker<T> {
     pub const ID: &'static str = "dynamic-picker";
 
     pub fn new(
-        file_picker: Picker<T>,
+        mut file_picker: Picker<T>,
         dynamic_column: usize,
         query_callback: DynQueryCallback<T>,
     ) -> Self {
+        file_picker.allow_scoring = false;
+        file_picker.column_names.remove(dynamic_column);
+
         Self {
             file_picker,
             dynamic_column,
             query_callback,
             query: String::new(),
         }
+    }
+
+    fn set_options(&mut self, options: Vec<T>) {
+        self.file_picker.options = options;
+        self.file_picker.cursor = 0;
+        self.file_picker.calculate_column_widths();
+        self.score();
+    }
+
+    fn score(&mut self) {
+        // Dynamic pickers have different scoring rules than normal pickers.
+        // `query.common` is ignored. Other fields must be specified explicitly.
+        // must be specified explicitly. The dynamic column is removed from the
+        // possible filter names in `DynamicPicker::new` so specifying it is
+        // not possible.
+        let query = self.file_picker.query();
+        self.file_picker.matches.clear();
+
+        if query.fields.is_empty() {
+            // Fast path for no fields.
+            self.file_picker
+                .matches
+                .extend(
+                    self.file_picker
+                        .options
+                        .iter()
+                        .enumerate()
+                        .map(|(index, option)| {
+                            let text =
+                                self.file_picker.columns[self.dynamic_column].filter_text(option);
+                            PickerMatch {
+                                index,
+                                score: 0,
+                                len: text.chars().count(),
+                            }
+                        }),
+                );
+        } else {
+            self.file_picker.matches.extend(
+                self.file_picker
+                    .options
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(option_index, option)| {
+                        let mut score = None;
+                        let mut len = None;
+
+                        for (_field, (column_index, _value, fuzzy_query)) in &query.fields {
+                            let text = self.file_picker.columns[*column_index].filter_text(option);
+                            let s = fuzzy_query.fuzzy_match(&text, &self.file_picker.matcher)?;
+                            score.get_or_insert(s);
+                            len.get_or_insert_with(|| text.chars().count());
+                        }
+
+                        Some(PickerMatch {
+                            index: option_index,
+                            score: score.unwrap_or_default(),
+                            len: len.unwrap_or_default(),
+                        })
+                    }),
+            );
+            self.file_picker.matches.sort_unstable();
+        }
+
+        self.file_picker.previous_query = query;
     }
 }
 
@@ -987,28 +1058,31 @@ impl<T: Send + 'static> Component for DynamicPicker<T> {
         let event_result = self.file_picker.handle_event(event, cx);
         let column = &self.file_picker.columns[self.dynamic_column];
         let query = self.file_picker.query();
-        let current_query = query.value(column.name);
+        let query_string = query.value(column.name);
 
-        if !matches!(event, Event::IdleTimeout) || self.query == *current_query {
+        if !matches!(event, Event::IdleTimeout) || self.file_picker.previous_query == query {
+            return event_result;
+        } else if self.query == *query_string {
+            // If the dynamic part of the query hasn't changed but some
+            // other field has, re-score the options.
+            self.score();
             return event_result;
         }
 
-        self.query.clone_from(current_query);
+        self.query.clone_from(query_string);
 
-        let new_options = (self.query_callback)(current_query.to_owned(), cx.editor);
+        let new_options = (self.query_callback)(query_string.to_owned(), cx.editor);
 
         cx.jobs.callback(async move {
             let new_options = new_options.await?;
             let callback = Callback::EditorCompositor(Box::new(move |editor, compositor| {
                 // Wrapping of pickers in overlay is done outside the picker code,
                 // so this is fragile and will break if wrapped in some other widget.
-                let picker = match compositor.find_id::<Overlay<DynamicPicker<T>>>(Self::ID) {
-                    Some(overlay) => &mut overlay.content.file_picker,
+                let dyn_picker = match compositor.find_id::<Overlay<DynamicPicker<T>>>(Self::ID) {
+                    Some(overlay) => &mut overlay.content,
                     None => return,
                 };
-                // TODO: dynamic picker needs custom ordering. Remove the set_options
-                // helper and do the sorting within this component.
-                picker.set_options(new_options);
+                dyn_picker.set_options(new_options);
                 editor.reset_idle_timer();
             }));
             anyhow::Ok(callback)
