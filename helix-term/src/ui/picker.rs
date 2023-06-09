@@ -121,10 +121,12 @@ impl Preview<'_, '_> {
 
 type PickerCallback<T> = Box<dyn Fn(&mut Context, &T, Action)>;
 
+type FilterTextFn<T> = Box<dyn Fn(&T) -> Cow<str>>;
+
 pub struct Column<T> {
     name: &'static str,
     format_fn: Box<dyn Fn(&T) -> Cell>,
-    filter_text_fn: Option<Box<dyn Fn(&T) -> Cow<str>>>,
+    filter_text_fn: Option<FilterTextFn<T>>,
 }
 
 impl<T> Column<T> {
@@ -294,7 +296,7 @@ impl<T> Picker<T> {
     }
 
     fn query(&self) -> Query {
-        Query::new(&self.column_names, &self.prompt.line())
+        Query::new(&self.column_names, self.prompt.line())
     }
 
     pub fn score(&mut self) {
@@ -363,7 +365,7 @@ impl<T> Picker<T> {
                         let mut score = None;
                         let mut len = None;
 
-                        for (_field, (column_index, _value, fuzzy_query)) in &query.fields {
+                        for (column_index, _value, fuzzy_query) in query.fields.values() {
                             // Exclude items that fail to match on every column.
                             let text = self.columns[*column_index].filter_text(option);
 
@@ -1044,7 +1046,7 @@ impl<T: Send + 'static> Component for DynamicPicker<T> {
             return event_result;
         }
 
-        self.query = query.clone();
+        self.query = query;
 
         let new_options = (self.query_callback)(self.query.common.0.clone(), cx.editor);
 

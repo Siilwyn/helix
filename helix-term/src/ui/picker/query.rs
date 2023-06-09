@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::ui::fuzzy_match::FuzzyQuery;
 
-#[derive(Default, PartialEq, Eq, Clone)]
+#[derive(Default, PartialEq, Eq)]
 pub struct Query {
     pub common: (String, FuzzyQuery),
     pub common_indices: Vec<usize>,

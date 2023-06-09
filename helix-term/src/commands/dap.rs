@@ -46,8 +46,9 @@ fn thread_picker(
                 ui::PickerColumn::new("state", move |item: &Thread| {
                     thread_states
                         .get(&item.id)
-                        .map(|state| state.as_str().to_string())
-                        .unwrap_or("unknown".to_string())
+                        .map(|state| state.as_str())
+                        .unwrap_or("unknown")
+                        .to_string()
                         .into()
                 }),
             ];

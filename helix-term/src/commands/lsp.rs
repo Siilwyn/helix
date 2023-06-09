@@ -1055,7 +1055,7 @@ fn goto_impl(
                     if item.uri.scheme() == "file" {
                         // With the preallocation above and UTF-8 paths already, this closure will do one (1)
                         // allocation, for `to_file_path`, else there will be two (2), with `to_string_lossy`.
-                        if let Some(path) = item.uri.to_file_path().ok() {
+                        if let Ok(path) = item.uri.to_file_path() {
                             res.push_str(
                                 &path.strip_prefix(&cwdir).unwrap_or(&path).to_string_lossy(),
                             );
