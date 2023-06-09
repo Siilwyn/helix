@@ -1,6 +1,10 @@
+//! A lucene-like syntax for the picker.
+
 use std::collections::HashMap;
 
 use crate::ui::fuzzy_match::FuzzyQuery;
+
+// TODO: unit tests for parsing.
 
 #[derive(Default, PartialEq, Eq)]
 pub struct Query {
@@ -13,6 +17,9 @@ pub struct Query {
 
 impl Query {
     pub fn new(field_names: &[String], input: &str) -> Self {
+        // TODO: this is as basic as possible for a proof-of-concept.
+        // We should also support strings like `path:"a b c.txt"` and
+        // maybe some other lucene features.
         let mut common = String::new();
         let mut common_indices: Vec<usize> = (0..field_names.len()).collect();
         let mut fields: HashMap<&str, (usize, String)> = HashMap::new();
