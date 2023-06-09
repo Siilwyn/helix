@@ -2199,7 +2199,7 @@ fn global_search(cx: &mut Context) {
                         Some((path.clone().into(), Some((*line_num, *line_num))))
                     }).with_line(initial_query, editor);
 
-                let dyn_picker = DynamicPicker::new(picker, Box::new(get_files));
+                let dyn_picker = DynamicPicker::new(picker, 1, Box::new(get_files));
                 compositor.push(Box::new(overlaid(dyn_picker)));
             },
         ));

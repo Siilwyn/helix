@@ -364,14 +364,6 @@ impl<T> Picker<T> {
         self.matches.sort_unstable();
     }
 
-    /// Finds the index of the dynamic column, if one exists.
-    fn dynamic_column(&self) -> Option<usize> {
-        self.columns
-            .iter()
-            .enumerate()
-            .find_map(|(i, column)| column.dynamic.then_some(i))
-    }
-
     pub fn truncate_start(mut self, truncate_start: bool) -> Self {
         self.truncate_start = truncate_start;
         self
@@ -922,6 +914,8 @@ pub type DynQueryCallback<T> =
 /// query string changes. Useful for live grep, workspace symbols, etc.
 pub struct DynamicPicker<T: Send> {
     file_picker: Picker<T>,
+    /// Index of the field in the Picker which is used as the dynamic input.
+    dynamic_column: usize,
     query_callback: DynQueryCallback<T>,
     query: String,
 }
@@ -929,9 +923,14 @@ pub struct DynamicPicker<T: Send> {
 impl<T: Send> DynamicPicker<T> {
     pub const ID: &'static str = "dynamic-picker";
 
-    pub fn new(file_picker: Picker<T>, query_callback: DynQueryCallback<T>) -> Self {
+    pub fn new(
+        file_picker: Picker<T>,
+        dynamic_column: usize,
+        query_callback: DynQueryCallback<T>,
+    ) -> Self {
         Self {
             file_picker,
+            dynamic_column,
             query_callback,
             query: String::new(),
         }
@@ -945,11 +944,9 @@ impl<T: Send + 'static> Component for DynamicPicker<T> {
 
     fn handle_event(&mut self, event: &Event, cx: &mut Context) -> EventResult {
         let event_result = self.file_picker.handle_event(event, cx);
-        let column = self
-            .file_picker
-            .dynamic_column()
-            .expect("dynamic pickers must have exactly one dynamic column");
-        let current_query = self.file_picker.prompts[column].line();
+        let column = &self.file_picker.columns[self.dynamic_column];
+        let query = self.file_picker.query();
+        let current_query = query.value(column.name());
 
         if !matches!(event, Event::IdleTimeout) || self.query == *current_query {
             return event_result;
@@ -968,6 +965,8 @@ impl<T: Send + 'static> Component for DynamicPicker<T> {
                     Some(overlay) => &mut overlay.content.file_picker,
                     None => return,
                 };
+                // TODO: dynamic picker needs custom ordering. Remove the set_options
+                // helper and do the sorting within this component.
                 picker.set_options(new_options);
                 editor.reset_idle_timer();
             }));
