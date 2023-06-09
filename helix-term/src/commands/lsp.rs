@@ -205,6 +205,9 @@ fn sym_picker(
         ],
         SymbolPickerScope::Workspace => vec![
             symbol_kind_column,
+            ui::PickerColumn::new("name", |item: &SymbolInformationItem| {
+                item.symbol.name.as_str().into()
+            }),
             ui::PickerColumn::new("path", |item: &SymbolInformationItem| {
                 match item.symbol.location.uri.to_file_path() {
                     Ok(path) => path::get_relative_path(path.as_path())
@@ -213,9 +216,6 @@ fn sym_picker(
                         .into(),
                     Err(_) => item.symbol.location.uri.to_string().into(),
                 }
-            }),
-            ui::PickerColumn::new("name", |item: &SymbolInformationItem| {
-                item.symbol.name.as_str().into()
             }),
         ],
     };
@@ -503,7 +503,7 @@ pub fn workspace_symbol_picker(cx: &mut Context) {
         let symbols = initial_symbols.await?;
         let call = move |_editor: &mut Editor, compositor: &mut Compositor| {
             let picker = sym_picker(symbols, current_url, SymbolPickerScope::Workspace);
-            let dyn_picker = DynamicPicker::new(picker, 2, Box::new(get_symbols));
+            let dyn_picker = DynamicPicker::new(picker, 1, Box::new(get_symbols));
             compositor.push(Box::new(overlaid(dyn_picker)))
         };
 
