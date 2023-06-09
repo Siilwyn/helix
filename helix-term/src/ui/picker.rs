@@ -163,7 +163,8 @@ impl<T> Column<T> {
 // hopslotmap of columns?
 
 pub struct Picker<T> {
-    // TODO: can we eliminate this?
+    // TODO: eliminate this, it's a big footgun. This should be tracked by the query
+    // instead. (Ideally we should only ever call Query::new once.)
     column_names: Vec<String>,
     columns: Vec<Column<T>>,
     options: Vec<T>,
@@ -264,8 +265,13 @@ impl<T> Picker<T> {
     /// Calculate the width constraints using the maximum widths of each column
     /// for the current options.
     fn calculate_column_widths(&mut self) {
-        let n = self.columns.len();
-        let max_lens = self.options.iter().fold(vec![0; n], |mut acc, option| {
+        let column_widths: Vec<_> = self
+            .columns
+            .iter()
+            .map(|column| column.name.chars().count())
+            .collect();
+
+        let max_lens = self.options.iter().fold(column_widths, |mut acc, option| {
             // maintain max for each column
             for (acc, column) in acc.iter_mut().zip(self.columns.iter()) {
                 let cell = column.format(option);
@@ -548,6 +554,9 @@ impl<T> Picker<T> {
     fn render_picker(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
         let text_style = cx.editor.theme.get("ui.text");
         let selected = cx.editor.theme.get("ui.text.focus");
+        // TODO: theme keys ui.picker.header.text, ui.picker.header.separator
+        let header_text_style = Style::default().fg(helix_view::theme::Color::Cyan);
+        let header_separator_style = Style::default().fg(helix_view::theme::Color::Cyan);
         let highlight_style = cx.editor.theme.get("special").add_modifier(Modifier::BOLD);
 
         // -- Render the frame:
@@ -735,12 +744,31 @@ impl<T> Picker<T> {
                     )
                 });
 
+        // TODO: flag to hide this?
+        let header = Row::new(self.columns.iter().zip(self.widths.iter()).map(
+            |(column, constraint)| {
+                let separator_len = constraint.apply(inner.width);
+                let separator: String = std::iter::repeat(borders.horizontal)
+                    .take(separator_len as usize)
+                    .collect();
+
+                Cell::from(tui::text::Text {
+                    lines: vec![
+                        Span::styled(column.name, header_text_style).into(),
+                        Span::styled(separator, header_separator_style).into(),
+                    ],
+                })
+            },
+        ))
+        .height(2);
+
         let table = Table::new(options)
             .style(text_style)
             .highlight_style(selected)
             .highlight_symbol(" > ")
             .column_spacing(1)
-            .widths(&self.widths);
+            .widths(&self.widths)
+            .header(header);
 
         use tui::widgets::TableState;
 
