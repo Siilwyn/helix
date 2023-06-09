@@ -2129,11 +2129,8 @@ fn global_search(cx: &mut Context) {
                 let current_path = doc!(editor).path().cloned();
 
                 let columns = vec![
-                    ui::PickerColumn::new("contents", |item: &FileResult| {
-                        item.line_content.as_str().into()
-                    }),
                     ui::PickerColumn::new("path", move |item: &FileResult| {
-                        let relative_path = helix_core::path::get_relative_path(&item.path)
+                        let relative_path = helix_core::path::get_truncated_path(&item.path)
                             .to_string_lossy()
                             .into_owned();
                         if current_path
@@ -2145,6 +2142,9 @@ fn global_search(cx: &mut Context) {
                         } else {
                             relative_path.into()
                         }
+                    }),
+                    ui::PickerColumn::new("contents", |item: &FileResult| {
+                        item.line_content.as_str().into()
                     }),
                 ];
 
@@ -2180,7 +2180,7 @@ fn global_search(cx: &mut Context) {
                         Some((path.clone().into(), Some((*line_num, *line_num))))
                     }).with_line(initial_query, editor);
 
-                let dyn_picker = DynamicPicker::new(picker, 0, Box::new(get_files));
+                let dyn_picker = DynamicPicker::new(picker, 1, Box::new(get_files));
                 compositor.push(Box::new(overlaid(dyn_picker)));
             },
         ));
