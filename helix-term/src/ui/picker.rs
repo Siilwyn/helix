@@ -595,94 +595,138 @@ impl<T> Picker<T> {
 
         let query = self.query();
 
-        let options = self
-            .matches
-            .iter()
-            .skip(offset)
-            .take(rows as usize)
-            .map(|pmatch| &self.options[pmatch.index])
-            .map(|option| {
-                // Build a row by enumerating over the columns.
+        let options =
+            self.matches
+                .iter()
+                .skip(offset)
+                .take(rows as usize)
+                .map(|pmatch| &self.options[pmatch.index])
+                .map(|option| {
+                    let common_highlight_byte_ranges: Vec<_> = if self.score_by_common {
+                        let common_text = query.common_indices.iter().fold(
+                            String::new(),
+                            |mut acc, column_index| {
+                                acc.push_str(&self.columns[*column_index].filter_text(option));
+                                acc
+                            },
+                        );
 
-                // I'm pretty sure I don't need the byte offset between cells.
-                Row::new(self.columns.iter().map(|column| {
-                    let cell = column.format(option);
-                    let spans = match cell.content.lines.get(0) {
-                        Some(spans) => spans,
-                        None => return cell,
+                        let (_score, highlights) = query
+                            .common
+                            .1
+                            .fuzzy_indices(&common_text, &self.matcher)
+                            .unwrap_or_default();
+
+                        common_text
+                            .char_indices()
+                            .enumerate()
+                            .filter_map(|(char_idx, (byte_offset, ch))| {
+                                highlights
+                                    .contains(&char_idx)
+                                    .then(|| byte_offset..byte_offset + ch.len_utf8())
+                            })
+                            .collect()
+                    } else {
+                        Vec::new()
                     };
-                    // Items are filtered by using the Cells text returned by Column::format
-                    // but we do highlighting here using the text in Cell and therefore there
-                    // might be inconsistencies. This is the best we can do since only the
-                    // text in Cell is displayed to the end user.
-                    let line: String = spans.into();
 
-                    // TODO: skip highlighting for display only columns? That will help in cases
-                    // like https://github.com/helix-editor/helix/issues/5714.
+                    // The starting byte index of the current (iterating) cell
+                    let mut cell_start_byte_offset = 0;
+                    Row::new(
+                        self.columns
+                            .iter()
+                            .enumerate()
+                            .map(|(column_index, column)| {
+                                let scored_by_common = self.score_by_common
+                                    && query.common_indices.contains(&column_index);
 
-                    // TODO: restore highlighting for common.
-                    let (_score, highlights) = query
-                        .fields
-                        .get(column.name)
-                        .and_then(|(_, _, fuzzy_query)| {
-                            fuzzy_query.fuzzy_indices(&line, &self.matcher)
-                        })
-                        .unwrap_or_default();
+                                let cell = column.format(option);
+                                let spans = match cell.content.lines.get(0) {
+                                    Some(spans) => spans,
+                                    None => return cell,
+                                };
+                                // Items are filtered by using the Cells text returned by Column::format
+                                // but we do highlighting here using the text in Cell and therefore there
+                                // might be inconsistencies. This is the best we can do since only the
+                                // text in Cell is displayed to the end user.
+                                let line: String = spans.into();
 
-                    let highlight_byte_ranges: Vec<_> = line
-                        .char_indices()
-                        .enumerate()
-                        .filter_map(|(char_idx, (byte_offset, ch))| {
-                            highlights
-                                .contains(&char_idx)
-                                .then(|| byte_offset..byte_offset + ch.len_utf8())
-                        })
-                        .collect();
+                                let highlight_byte_ranges = if scored_by_common {
+                                    // TODO: eliminate this clone
+                                    common_highlight_byte_ranges.clone()
+                                } else {
+                                    let (_score, highlights) = query
+                                        .fields
+                                        .get(column.name)
+                                        .and_then(|(_, _, fuzzy_query)| {
+                                            fuzzy_query.fuzzy_indices(&line, &self.matcher)
+                                        })
+                                        .unwrap_or_default();
 
-                    let mut cell_len = 0;
-                    let graphemes_with_style: Vec<_> = spans
-                        .0
-                        .iter()
-                        .flat_map(|span| {
-                            span.content
-                                .grapheme_indices(true)
-                                .zip(std::iter::repeat(span.style))
-                        })
-                        .map(|((grapheme_byte_offset, grapheme), style)| {
-                            cell_len += grapheme.len();
-                            let grapheme_byte_range =
-                                grapheme_byte_offset..grapheme_byte_offset + grapheme.len();
+                                    line.char_indices()
+                                        .enumerate()
+                                        .filter_map(|(char_idx, (byte_offset, ch))| {
+                                            highlights
+                                                .contains(&char_idx)
+                                                .then(|| byte_offset..byte_offset + ch.len_utf8())
+                                        })
+                                        .collect()
+                                };
 
-                            if highlight_byte_ranges.iter().any(|hl_rng| {
-                                hl_rng.start >= grapheme_byte_range.start
-                                    && hl_rng.end <= grapheme_byte_range.end
-                            }) {
-                                (grapheme, style.patch(highlight_style))
-                            } else {
-                                (grapheme, style)
-                            }
-                        })
-                        .collect();
+                                let mut cell_len = 0;
+                                let graphemes_with_style: Vec<_> = spans
+                                    .0
+                                    .iter()
+                                    .flat_map(|span| {
+                                        span.content
+                                            .grapheme_indices(true)
+                                            .zip(std::iter::repeat(span.style))
+                                    })
+                                    .map(|((grapheme_byte_offset, grapheme), style)| {
+                                        cell_len += grapheme.len();
+                                        let start = if scored_by_common {
+                                            cell_start_byte_offset
+                                        } else {
+                                            0
+                                        };
+                                        let grapheme_byte_range = grapheme_byte_offset
+                                            ..grapheme_byte_offset + grapheme.len();
 
-                    let mut span_list: Vec<(String, Style)> = Vec::new();
-                    for (grapheme, style) in graphemes_with_style {
-                        if span_list.last().map(|(_, sty)| sty) == Some(&style) {
-                            let (string, _) = span_list.last_mut().unwrap();
-                            string.push_str(grapheme);
-                        } else {
-                            span_list.push((String::from(grapheme), style))
-                        }
-                    }
+                                        if highlight_byte_ranges.iter().any(|hl_rng| {
+                                            hl_rng.start >= start + grapheme_byte_range.start
+                                                && hl_rng.end <= start + grapheme_byte_range.end
+                                        }) {
+                                            (grapheme, style.patch(highlight_style))
+                                        } else {
+                                            (grapheme, style)
+                                        }
+                                    })
+                                    .collect();
 
-                    let spans: Vec<Span> = span_list
-                        .into_iter()
-                        .map(|(string, style)| Span::styled(string, style))
-                        .collect();
-                    let spans: Spans = spans.into();
+                                let mut span_list: Vec<(String, Style)> = Vec::new();
+                                for (grapheme, style) in graphemes_with_style {
+                                    if span_list.last().map(|(_, sty)| sty) == Some(&style) {
+                                        let (string, _) = span_list.last_mut().unwrap();
+                                        string.push_str(grapheme);
+                                    } else {
+                                        span_list.push((String::from(grapheme), style))
+                                    }
+                                }
 
-                    Cell::from(spans)
-                }))
-            });
+                                let spans: Vec<Span> = span_list
+                                    .into_iter()
+                                    .map(|(string, style)| Span::styled(string, style))
+                                    .collect();
+                                let spans: Spans = spans.into();
+
+                                if scored_by_common {
+                                    cell_start_byte_offset += cell_len;
+                                }
+
+                                Cell::from(spans)
+                            }),
+                    )
+                });
 
         let table = Table::new(options)
             .style(text_style)
