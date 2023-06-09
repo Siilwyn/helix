@@ -1,11 +1,11 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::ui::fuzzy_match::FuzzyQuery;
 
 #[derive(Default, PartialEq, Eq, Clone)]
 pub struct Query {
     pub common: (String, FuzzyQuery),
-    pub common_indices: HashSet<usize>,
+    pub common_indices: Vec<usize>,
     /// A mapping between field name and a tuple of the original column index
     /// and the fuzzy query for that field.
     pub fields: HashMap<String, (usize, String, FuzzyQuery)>,
@@ -14,7 +14,7 @@ pub struct Query {
 impl Query {
     pub fn new(field_names: &[String], input: &str) -> Self {
         let mut common = String::new();
-        let mut common_indices: HashSet<usize> = (0..field_names.len()).collect();
+        let mut common_indices: Vec<usize> = (0..field_names.len()).collect();
         let mut fields: HashMap<&str, (usize, String)> = HashMap::new();
 
         for token in input.trim().split_ascii_whitespace() {
@@ -28,7 +28,7 @@ impl Query {
                         // Only insert valid fields.
                         // TODO: case-insensitive?
                         fields.insert(key, (index, value.to_string()));
-                        common_indices.remove(&index);
+                        common_indices.remove(index);
                     } else {
                         // If the field is not valid, treat the text as common.
                         if !common.is_empty() {
