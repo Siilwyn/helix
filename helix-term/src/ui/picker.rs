@@ -602,7 +602,7 @@ impl<T> Picker<T> {
                 .take(rows as usize)
                 .map(|pmatch| &self.options[pmatch.index])
                 .map(|option| {
-                    let common_highlight_byte_ranges: Vec<_> = if self.score_by_common {
+                    let mut common_highlight_byte_ranges: Vec<_> = if self.score_by_common {
                         let common_text = query.common_indices.iter().fold(
                             String::new(),
                             |mut acc, column_index| {
@@ -651,9 +651,9 @@ impl<T> Picker<T> {
                                 // text in Cell is displayed to the end user.
                                 let line: String = spans.into();
 
-                                let highlight_byte_ranges = if scored_by_common {
-                                    // TODO: eliminate this clone
-                                    common_highlight_byte_ranges.clone()
+                                let mut highlight_byte_ranges = &mut Vec::new();
+                                if scored_by_common {
+                                    highlight_byte_ranges = &mut common_highlight_byte_ranges;
                                 } else {
                                     let (_score, highlights) = query
                                         .fields
@@ -663,15 +663,20 @@ impl<T> Picker<T> {
                                         })
                                         .unwrap_or_default();
 
-                                    line.char_indices()
-                                        .enumerate()
-                                        .filter_map(|(char_idx, (byte_offset, ch))| {
-                                            highlights
-                                                .contains(&char_idx)
-                                                .then(|| byte_offset..byte_offset + ch.len_utf8())
-                                        })
-                                        .collect()
+                                    highlight_byte_ranges.extend(
+                                        line.char_indices().enumerate().filter_map(
+                                            |(char_idx, (byte_offset, ch))| {
+                                                highlights.contains(&char_idx).then(|| {
+                                                    byte_offset..byte_offset + ch.len_utf8()
+                                                })
+                                            },
+                                        ),
+                                    );
                                 };
+                                // This is intially a mutable borrow but only to appease the
+                                // borrow checker that the ranges in the 'else' block live
+                                // long enough. Switch to an immutable borrow:
+                                let highlight_byte_ranges = &*highlight_byte_ranges;
 
                                 let mut cell_len = 0;
                                 let graphemes_with_style: Vec<_> = spans
