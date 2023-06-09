@@ -1,3 +1,5 @@
+mod query;
+
 use crate::{
     alt,
     compositor::{Component, Compositor, Context, Event, EventResult},
@@ -7,7 +9,7 @@ use crate::{
     ui::{
         self,
         document::{render_document, LineDecoration, LinePos, TextRenderer},
-        fuzzy_match::FuzzyQuery,
+        picker::query::Query,
         EditorView,
     },
 };
@@ -120,6 +122,7 @@ type PickerCallback<T> = Box<dyn Fn(&mut Context, &T, Action)>;
 
 pub struct Picker<T> {
     columns: Vec<Box<dyn Column<Item = T>>>,
+    column_names: Vec<String>,
     options: Vec<T>,
     // TODO: vec of these?
     matcher: Box<Matcher>,
@@ -129,8 +132,8 @@ pub struct Picker<T> {
     completion_height: u16,
 
     cursor: usize,
-    prompts: Vec<Prompt>,
-    previous_patterns: Vec<(String, FuzzyQuery)>,
+    prompt: Prompt,
+    previous_query: Query,
     /// Whether to show the preview panel (default true)
     show_preview: bool,
     /// Constraints for tabular formatting
@@ -153,26 +156,29 @@ impl<T> Picker<T> {
     ) -> Self {
         assert!(!columns.is_empty());
 
-        let mut prompts = Vec::with_capacity(columns.len());
-        let mut previous_patterns = Vec::with_capacity(columns.len());
-        for _ in 0..columns.len() {
-            prompts.push(Prompt::new(
-                "".into(),
-                None,
-                ui::completers::none,
-                |_editor: &mut Context, _pattern: &str, _event: PromptEvent| {},
-            ));
-            previous_patterns.push((String::new(), FuzzyQuery::default()));
-        }
+        let prompt = Prompt::new(
+            "".into(),
+            None,
+            ui::completers::none,
+            |_editor: &mut Context, _pattern: &str, _event: PromptEvent| {},
+        );
+
+        let column_names: Vec<_> = columns
+            .iter()
+            .map(|column| column.name().to_string())
+            .collect();
+
+        let previous_query = Query::new(&column_names, "");
 
         let mut picker = Self {
             columns,
+            column_names,
             options,
             matcher: Box::default(),
             matches: Vec::new(),
             cursor: 0,
-            prompts,
-            previous_patterns,
+            prompt,
+            previous_query,
             show_preview: true,
             callback_fn: Box::new(callback_fn),
             completion_height: 0,
@@ -239,27 +245,27 @@ impl<T> Picker<T> {
     }
 
     pub fn with_line(mut self, line: String, editor: &Editor) -> Self {
-        self.prompts[0].set_line(line, editor);
+        self.prompt.set_line(line, editor);
         self
     }
 
+    fn query(&self) -> Query {
+        Query::new(&self.column_names, &self.prompt.line())
+    }
+
     pub fn score(&mut self) {
-        if self.columns[0].display_only {
+        let query = self.query();
+
+        if query == self.previous_query {
             return;
         }
 
-        let pattern = self.prompts[0].line();
+        // TODO: detect query refinement.
+        // let (query, is_refined) = self.previous_patterns[0]
+        //     .1
+        //     .refine(pattern, &previous_pattern);
 
-        let previous_pattern = &self.previous_patterns[0].0;
-        if pattern == previous_pattern {
-            return;
-        }
-
-        let (query, is_refined) = self.previous_patterns[0]
-            .1
-            .refine(pattern, &previous_pattern);
-
-        if self.prompts.iter().all(|prompt| prompt.line().is_empty()) {
+        if query.is_empty() {
             // Fast path for no pattern.
             self.matches.clear();
             self.matches
@@ -271,45 +277,37 @@ impl<T> Picker<T> {
                         len: text.chars().count(),
                     }
                 }));
-        } else if is_refined {
-            // optimization: if the pattern is a more specific version of the previous one
-            // then we can score the filtered set and only consider the current column.
-            self.matches.retain_mut(|pmatch| {
-                let option = &self.options[pmatch.index];
-                let text = self.columns[0].sort_text(option);
+        // } else if is_refined {
+        //     // optimization: if the pattern is a more specific version of the previous one
+        //     // then we can score the filtered set and only consider the current column.
+        //     self.matches.retain_mut(|pmatch| {
+        //         let option = &self.options[pmatch.index];
+        //         let text = self.columns[0].sort_text(option);
 
-                match query.fuzzy_match(&text, &self.matcher) {
-                    Some(s) => {
-                        // Update the score
-                        pmatch.score = s;
-                        true
-                    }
-                    None => false,
-                }
-            });
+        //         match query.fuzzy_match(&text, &self.matcher) {
+        //             Some(s) => {
+        //                 // Update the score
+        //                 pmatch.score = s;
+        //                 true
+        //             }
+        //             None => false,
+        //         }
+        //     });
 
-            self.matches.sort_unstable();
+        //     self.matches.sort_unstable();
         } else {
             self.force_score();
         }
 
         // reset cursor position
         self.cursor = 0;
-        let pattern = self.prompts[0].line();
-        let previous_pattern = &mut self.previous_patterns[0];
-        previous_pattern.0.clone_from(pattern);
-        previous_pattern.1 = query;
+        self.previous_query = query;
     }
 
     /// Recompute the score for all options across all columns.
     pub fn force_score(&mut self) {
-        let queries: Vec<_> = self
-            .prompts
-            .iter()
-            .enumerate()
-            .filter(|(i, _prompt)| !self.columns[*i].display_only)
-            .map(|(_i, prompt)| FuzzyQuery::new(prompt.line()))
-            .collect();
+        // TODO re-use query if possible.
+        let query = self.query();
 
         self.matches.clear();
         self.matches
@@ -320,20 +318,36 @@ impl<T> Picker<T> {
                     .filter_map(|(option_index, option)| {
                         let mut score = None;
                         let mut len = None;
-                        for (query_index, column) in self
-                            .columns
-                            .iter()
-                            .filter(|column| !column.display_only)
-                            .enumerate()
-                        {
-                            let text = column.filter_text(option);
 
+                        for (_field, (column_index, _value, fuzzy_query)) in &query.fields {
                             // Exclude items that fail to match on every column.
-                            let s = queries[query_index].fuzzy_match(&text, &self.matcher)?;
+                            let text = self.columns[*column_index].filter_text(option);
 
                             // Sort by the first non-display-only column.
-                            score = Some(s);
+                            let s = fuzzy_query.fuzzy_match(&text, &self.matcher)?;
+
+                            // Sort by the first non-display-only column.
+                            score.get_or_insert(s);
                             len.get_or_insert_with(|| text.chars().count());
+                        }
+
+                        let mut common_text = String::new();
+                        for (_column_index, column) in
+                            self.columns
+                                .iter()
+                                .enumerate()
+                                .filter(|(column_index, _column)| {
+                                    query.common_indices.contains(&column_index)
+                                })
+                        {
+                            if !common_text.is_empty() {
+                                common_text.push(' ');
+                            }
+                            let text = column.filter_text(option);
+                            let s = query.common.1.fuzzy_match(&text, &self.matcher)?;
+                            score.get_or_insert(s);
+                            len.get_or_insert_with(|| text.chars().count());
+                            common_text.push_str(&text);
                         }
 
                         let score = score.expect("at least one column must be non-display-only");
@@ -398,13 +412,6 @@ impl<T> Picker<T> {
         self.move_by(self.completion_height as usize, Direction::Forward);
     }
 
-    pub fn rotate_left(&mut self) {
-        self.columns.rotate_left(1);
-        self.prompts.rotate_left(1);
-        self.previous_patterns.rotate_left(1);
-        self.widths.rotate_left(1);
-    }
-
     /// Move the cursor to the first entry
     pub fn to_start(&mut self) {
         self.cursor = 0;
@@ -421,16 +428,12 @@ impl<T> Picker<T> {
             .map(|pmatch| &self.options[pmatch.index])
     }
 
-    pub fn line(&self) -> &String {
-        self.prompts[0].line()
-    }
-
     pub fn toggle_preview(&mut self) {
         self.show_preview = !self.show_preview;
     }
 
     fn prompt_handle_event(&mut self, event: &Event, cx: &mut Context) -> EventResult {
-        if let EventResult::Consumed(_) = self.prompts[0].handle_event(event, cx) {
+        if let EventResult::Consumed(_) = self.prompt.handle_event(event, cx) {
             // TODO: recalculate only if pattern changed
             self.score();
         }
@@ -543,7 +546,7 @@ impl<T> Picker<T> {
             text_style,
         );
 
-        self.prompts[0].render(area, surface, cx);
+        self.prompt.render(area, surface, cx);
 
         // -- Separator
         let sep_style = cx.editor.theme.get("ui.background.separator");
@@ -562,6 +565,8 @@ impl<T> Picker<T> {
         let offset = self.cursor - (self.cursor % std::cmp::max(1, rows as usize));
         let cursor = self.cursor.saturating_sub(offset);
 
+        let query = self.query();
+
         let options = self
             .matches
             .iter()
@@ -572,7 +577,7 @@ impl<T> Picker<T> {
                 // Build a row by enumerating over the columns.
 
                 // I'm pretty sure I don't need the byte offset between cells.
-                Row::new(self.columns.iter().enumerate().map(|(column_idx, column)| {
+                Row::new(self.columns.iter().map(|column| {
                     let cell = column.format(option);
                     let spans = match cell.content.lines.get(0) {
                         Some(spans) => spans,
@@ -584,14 +589,12 @@ impl<T> Picker<T> {
                     // text in Cell is displayed to the end user.
                     let line: String = spans.into();
 
-                    // TODO: only draw matching parts for the active column? That would make it
-                    // clearer which column is active. Or maybe use a separate theme scope for the
-                    // inactive columns?
-
                     // TODO: skip highlighting for display only columns? That will help in cases
                     // like https://github.com/helix-editor/helix/issues/5714.
 
-                    let (_score, highlights) = FuzzyQuery::new(self.prompts[column_idx].line())
+                    // TODO: restore highlighting for common.
+                    let (_score, highlights) = query.fields[column.name()]
+                        .2
                         .fuzzy_indices(&line, &self.matcher)
                         .unwrap_or_default();
 
@@ -860,13 +863,6 @@ impl<T: 'static> Component for Picker<T> {
             ctrl!('t') => {
                 self.toggle_preview();
             }
-            // TODO: decide on a proper key and document it.
-            // Do we need forward + backward or is just forward enough?
-            // C-f is not ideal, it should be a scrolling keybind (C-f/C-b should
-            // be the current C-u/C-d and C-u/C-d should move half-pages.).
-            ctrl!('f') => {
-                self.rotate_left();
-            }
             _ => {
                 self.prompt_handle_event(event, ctx);
             }
@@ -883,7 +879,7 @@ impl<T: 'static> Component for Picker<T> {
         // prompt area
         let area = inner.clip_left(1).with_height(1);
 
-        self.prompts[0].cursor(area, ctx)
+        self.prompt.cursor(area, ctx)
     }
 
     fn required_size(&mut self, (width, height): (u16, u16)) -> Option<(u16, u16)> {

@@ -4,6 +4,7 @@ use fuzzy_matcher::FuzzyMatcher;
 #[cfg(test)]
 mod test;
 
+#[derive(PartialEq, Eq)]
 struct QueryAtom {
     kind: QueryAtomKind,
     atom: String,
@@ -138,7 +139,7 @@ enum QueryAtomKind {
     Exact,
 }
 
-#[derive(Default)]
+#[derive(Default, PartialEq, Eq)]
 pub struct FuzzyQuery {
     first_fuzzy_atom: Option<String>,
     query_atoms: Vec<QueryAtom>,
@@ -157,6 +158,7 @@ fn query_atoms(query: &str) -> impl Iterator<Item = &str> + '_ {
 }
 
 impl FuzzyQuery {
+    #[allow(dead_code)]
     pub fn refine(&self, query: &str, old_query: &str) -> (FuzzyQuery, bool) {
         // TODO: we could be a lot smarter about this
         let new_query = Self::new(query);
