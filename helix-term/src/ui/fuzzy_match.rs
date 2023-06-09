@@ -4,7 +4,7 @@ use fuzzy_matcher::FuzzyMatcher;
 #[cfg(test)]
 mod test;
 
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Clone)]
 struct QueryAtom {
     kind: QueryAtomKind,
     atom: String,
@@ -139,7 +139,7 @@ enum QueryAtomKind {
     Exact,
 }
 
-#[derive(Default, PartialEq, Eq)]
+#[derive(Default, PartialEq, Eq, Clone)]
 pub struct FuzzyQuery {
     first_fuzzy_atom: Option<String>,
     query_atoms: Vec<QueryAtom>,

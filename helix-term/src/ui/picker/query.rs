@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::ui::fuzzy_match::FuzzyQuery;
 
-#[derive(Default, PartialEq, Eq)]
+#[derive(Default, PartialEq, Eq, Clone)]
 pub struct Query {
     pub common: (String, FuzzyQuery),
     pub common_indices: HashSet<usize>,
@@ -61,16 +61,5 @@ impl Query {
             common_indices,
             fields,
         }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.common.0.is_empty() && self.fields.is_empty()
-    }
-
-    pub fn value(&self, field: &str) -> &String {
-        self.fields
-            .get(field)
-            .map(|(_index, value, _query)| value)
-            .unwrap_or(&self.common.0)
     }
 }
